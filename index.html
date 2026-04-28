@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bolt Food Poland — Area Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.44.0/dist/apexcharts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>
+<style>
+:root {
+  --bg:         #0f0f1a;
+  --surface:    #16162a;
+  --surface2:   #1e1e35;
+  --border:     #2a2a45;
+  --text:       #f0f0f5;
+  --text2:      #a0a0be;
+  --text3:      #6b6b88;
+  --accent:     #34D186;
+  --accent2:    #3b82f6;
+  --accent3:    #f59e0b;
+  --danger:     #ef4444;
+  --purple:     #8b5cf6;
+  --radius:     12px;
+}
+[data-theme="light"] {
+  --bg:       #f2f3f7;
+  --surface:  #ffffff;
+  --surface2: #f0f0f8;
+  --border:   #dfe1e8;
+  --text:     #1a1a2e;
+  --text2:    #4a4a60;
+  --text3:    #71717a;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Sidebar ── */
+#sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 0;
+  overflow-y: auto;
+}
+.sidebar-logo {
+  padding: 0 20px 24px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sidebar-logo span { color: var(--accent); }
+.nav-section-label {
+  padding: 0 20px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text3);
+}
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--text2);
+  font-size: 13.5px;
+  width: 100%;
+  text-align: left;
+  transition: all .15s;
+  border-left: 3px solid transparent;
+}
+.nav-btn:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+.nav-btn.active {
+  background: rgba(52,209,134,0.08);
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+.sidebar-footer {
+  margin-top: auto;
+  padding: 16px 20px 4px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.week-badge {
+  font-size: 11px;
+  color: var(--text3);
+}
+#themeToggleWrap { display: flex; }
+
+/* ── Main panel ── */
+#main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 32px;
+}
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Page header ── */
+.page-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+.page-sub {
+  font-size: 13px;
+  color: var(--text3);
+}
+
+/* ── KPI cards ── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+.kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  transition: border-color .2s;
+}
+.kpi-card:hover { border-color: var(--accent); }
+.kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+  margin-bottom: 8px;
+}
+.kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 8px;
+}
+.kpi-wow {
+  font-size: 12px;
+  font-weight: 600;
+}
+.wow-up   { color: var(--accent); }
+.wow-down { color: var(--danger); }
+.wow-neut { color: var(--text3); }
+
+/* ── Section header ── */
+.section-header {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+  margin-bottom: 14px;
+  margin-top: 8px;
+}
+
+/* ── City table ── */
+.city-table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: auto;
+  margin-bottom: 28px;
+}
+.city-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.city-table th {
+  padding: 12px 14px;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.city-table th:first-child { text-align: left; }
+.city-table th:hover { color: var(--accent); }
+.city-table th .sort-icon { margin-left: 4px; opacity: 0.4; }
+.city-table th.sorted-asc .sort-icon::after  { content: ' ↑'; opacity: 1; color: var(--accent); }
+.city-table th.sorted-desc .sort-icon::after { content: ' ↓'; opacity: 1; color: var(--accent); }
+.city-table td {
+  padding: 11px 14px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.city-table td:first-child { text-align: left; font-weight: 600; }
+.city-table tr:last-child td { border-bottom: none; }
+.city-table tr:hover td { background: rgba(255,255,255,0.02); }
+.city-table .total-row td {
+  font-weight: 700;
+  color: var(--accent);
+  border-top: 2px solid var(--border);
+}
+.cell-wow { font-size: 11px; display: block; margin-top: 2px; }
+
+/* ── AM KPI cards ── */
+.am-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+  margin-bottom: 28px;
+}
+.am-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+}
+.am-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.am-score {
+  font-size: 12px;
+  color: var(--text3);
+  margin-bottom: 18px;
+}
+.am-score span { font-weight: 700; color: var(--accent); font-size: 18px; }
+.kpi-row {
+  margin-bottom: 12px;
+}
+.kpi-row-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 5px;
+  color: var(--text2);
+}
+.kpi-row-header .kpi-name { font-weight: 600; }
+.kpi-row-header .kpi-val { color: var(--text3); }
+.progress-bar-bg {
+  height: 6px;
+  background: var(--surface2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.8s cubic-bezier(0.25,0.46,0.45,0.94);
+}
+.fill-green  { background: var(--accent); }
+.fill-amber  { background: var(--accent3); }
+.fill-red    { background: var(--danger); }
+.fill-purple { background: var(--purple); }
+
+/* ── Movers ── */
+.movers-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 28px;
+}
+.movers-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+.movers-card h3 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text3);
+  margin-bottom: 14px;
+}
+.mover-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.mover-row:last-child { border-bottom: none; }
+.mover-city { font-weight: 600; }
+.mover-delta { font-weight: 700; }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  #sidebar { display: none; }
+  #main { padding: 16px; }
+}
+</style>
+<script src="theme.js" defer></script>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav id="sidebar">
+  <div class="sidebar-logo">
+    <span>⚡</span> PL ARM
+  </div>
+
+  <div class="nav-section-label">Analytics</div>
+  <button class="nav-btn active" onclick="showTab('overview',this)">
+    📊 Overview
+  </button>
+  <button class="nav-btn" onclick="showTab('cities',this)">
+    🏙️ Cities
+  </button>
+  <button class="nav-btn" onclick="showTab('am_kpis',this)">
+    🎯 AM KPIs
+  </button>
+
+  <div class="sidebar-footer">
+    <span class="week-badge">W17 (20 Apr–26 Apr 2026)</span>
+    <div id="themeToggleWrap"></div>
+  </div>
+</nav>
+
+<!-- Main -->
+<main id="main">
+
+  <!-- Overview tab -->
+  <div id="tab-overview" class="tab-panel active">
+    <div class="page-header">
+      <span class="page-title">Poland Overview</span>
+      <span class="page-sub" id="overviewWeek">W17 (20 Apr–26 Apr 2026)</span>
+    </div>
+
+    <div class="kpi-grid" id="kpiGrid"></div>
+
+    <div class="section-header">City Movers (Orders WoW)</div>
+    <div class="movers-grid" id="moversGrid"></div>
+  </div>
+
+  <!-- Cities tab -->
+  <div id="tab-cities" class="tab-panel">
+    <div class="page-header">
+      <span class="page-title">City Breakdown</span>
+      <span class="page-sub">Click column headers to sort</span>
+    </div>
+    <div class="city-table-wrap">
+      <table class="city-table" id="cityTable">
+        <thead>
+          <tr>
+            <th data-col="name"    data-type="str">City <span class="sort-icon"></span></th>
+            <th data-col="gmv"     data-type="num">GMV <span class="sort-icon"></span></th>
+            <th data-col="gmv_wow" data-type="num">GMV WoW <span class="sort-icon"></span></th>
+            <th data-col="orders"  data-type="num">Orders <span class="sort-icon"></span></th>
+            <th data-col="orders_wow" data-type="num">Ord WoW <span class="sort-icon"></span></th>
+            <th data-col="cml2_pct" data-type="num">CML2% <span class="sort-icon"></span></th>
+            <th data-col="cml2_wow" data-type="num">CML2 Δ <span class="sort-icon"></span></th>
+            <th data-col="di_pct"  data-type="num">DI% <span class="sort-icon"></span></th>
+            <th data-col="di_wow"  data-type="num">DI Δ <span class="sort-icon"></span></th>
+            <th data-col="cpo"     data-type="num">CPO <span class="sort-icon"></span></th>
+            <th data-col="cpo_wow" data-type="num">CPO Δ <span class="sort-icon"></span></th>
+            <th data-col="util_pct" data-type="num">Util% <span class="sort-icon"></span></th>
+            <th data-col="ar_pct"  data-type="num">AR% <span class="sort-icon"></span></th>
+            <th data-col="bo_pct"  data-type="num">BO% <span class="sort-icon"></span></th>
+            <th data-col="merchants" data-type="num">Merchants <span class="sort-icon"></span></th>
+          </tr>
+        </thead>
+        <tbody id="cityTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- AM KPIs tab -->
+  <div id="tab-am_kpis" class="tab-panel">
+    <div class="page-header">
+      <span class="page-title">AM KPIs — Q2 2026</span>
+      <span class="page-sub">Month-to-date vs monthly targets (Apr–Jun). Bonus: 90%–130% achievement.</span>
+    </div>
+    <div class="am-grid" id="amGrid"></div>
+
+    <div class="section-header">KPI Weights</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px" id="weightsRow"></div>
+  </div>
+
+</main>
+
+<script>
+const CITIES  = [{"name": "Krakow", "gmv": 185346.0, "orders": 8367.0, "cml2_pct": -2.03, "di_pct": 13.83, "cpo": 3.62, "util_pct": 33.6, "ar_pct": 45.3, "bo_pct": 100.0, "gmv_wow": -8.0, "orders_wow": -8.3, "cml2_wow": 1.82, "di_wow": -1.53, "cpo_wow": -0.05, "util_wow": -5.13, "ar_wow": 3.36}, {"name": "Poznan", "gmv": 50023.0, "orders": 2381.0, "cml2_pct": -7.37, "di_pct": 17.32, "cpo": 3.54, "util_pct": 17.9, "ar_pct": 48.0, "bo_pct": 100.0, "gmv_wow": -11.9, "orders_wow": -11.1, "cml2_wow": 0.7, "di_wow": -0.91, "cpo_wow": 0.12, "util_wow": -3.68, "ar_wow": 5.33}, {"name": "Gdansk", "gmv": 46385.0, "orders": 2063.0, "cml2_pct": -4.01, "di_pct": 11.45, "cpo": 3.67, "util_pct": 34.8, "ar_pct": 59.9, "bo_pct": 100.0, "gmv_wow": -4.3, "orders_wow": -3.7, "cml2_wow": -0.84, "di_wow": 0.3, "cpo_wow": -0.06, "util_wow": -1.44, "ar_wow": 2.79}, {"name": "Wroclaw", "gmv": 25177.0, "orders": 1206.0, "cml2_pct": -2.53, "di_pct": 7.44, "cpo": 3.24, "util_pct": 20.5, "ar_pct": 43.8, "bo_pct": 100.0, "gmv_wow": -15.7, "orders_wow": -11.8, "cml2_wow": 0.36, "di_wow": -0.11, "cpo_wow": -0.07, "util_wow": -3.99, "ar_wow": 5.3}, {"name": "Lublin", "gmv": 23034.0, "orders": 1227.0, "cml2_pct": -15.7, "di_pct": 23.88, "cpo": 3.54, "util_pct": 23.6, "ar_pct": 69.3, "bo_pct": 22.32, "gmv_wow": -9.5, "orders_wow": -13.3, "cml2_wow": 1.41, "di_wow": 0.56, "cpo_wow": 0.28, "util_wow": -10.07, "ar_wow": 3.82}, {"name": "Bialystok", "gmv": 14830.0, "orders": 682.0, "cml2_pct": -31.83, "di_pct": 29.58, "cpo": 4.11, "util_pct": 20.8, "ar_pct": 58.1, "bo_pct": 43.4, "gmv_wow": -2.4, "orders_wow": -8.3, "cml2_wow": 0.07, "di_wow": 1.3, "cpo_wow": 0.33, "util_wow": 4.37, "ar_wow": -8.66}, {"name": "Lodz", "gmv": 10891.0, "orders": 495.0, "cml2_pct": -15.99, "di_pct": 12.66, "cpo": 3.64, "util_pct": 19.5, "ar_pct": 41.2, "bo_pct": 100.0, "gmv_wow": 1.3, "orders_wow": -1.4, "cml2_wow": -3.36, "di_wow": 1.36, "cpo_wow": 0.83, "util_wow": -1.97, "ar_wow": 0.47}, {"name": "Silesia", "gmv": 5228.0, "orders": 269.0, "cml2_pct": -8.55, "di_pct": 10.12, "cpo": 3.33, "util_pct": 8.9, "ar_pct": 47.8, "bo_pct": 66.67, "gmv_wow": -11.5, "orders_wow": -11.5, "cml2_wow": -0.94, "di_wow": 1.19, "cpo_wow": -0.19, "util_wow": -3.22, "ar_wow": 4.16}, {"name": "Torun", "gmv": 832.0, "orders": 48.0, "cml2_pct": -18.71, "di_pct": 10.6, "cpo": 4.53, "util_pct": 5.4, "ar_pct": 31.6, "bo_pct": 80.0, "gmv_wow": 8.4, "orders_wow": 2.1, "cml2_wow": 8.37, "di_wow": 2.96, "cpo_wow": -0.08, "util_wow": -0.6, "ar_wow": 2.55}];
+const TOTALS  = {"gmv": 361746.0, "orders": 16738.0, "cml2_pct": -5.702093347265761, "di_pct": 14.752032116457405, "cpo": 3.6000442107778707, "util_pct": 28.421262994384033, "ar_pct": 49.53601983510574, "bo_pct": 91.40636097502689, "gmv_wow": -8.3, "orders_wow": -8.7};
+const AM_KPIS = [{"name": "Gabriela Ziółek", "score": 86.7, "kpis": {"churn": {"actual": 0, "target": 0, "pct": 100}, "reneg": {"actual": 1, "target": 4, "pct": 25.0}, "mktg": {"actual": 0, "target": 25, "pct": 0.0}, "smart": {"actual": 43, "target": 30, "pct": 143.3}, "ads": {"actual": 25, "target": 22, "pct": 113.6}, "boltplus": {"actual": 271, "target": 173, "pct": 156.6}}}, {"name": "Patrycja Konfederak", "score": 108.8, "kpis": {"churn": {"actual": 0, "target": 0, "pct": 100}, "reneg": {"actual": 10, "target": 3, "pct": 333.3}, "mktg": {"actual": 0, "target": 25, "pct": 0.0}, "smart": {"actual": 69, "target": 60, "pct": 115.0}, "ads": {"actual": 21, "target": 10, "pct": 210.0}, "boltplus": {"actual": 295, "target": 127, "pct": 232.3}}}, {"name": "Weronika Słomska", "score": 101.9, "kpis": {"churn": {"actual": 0, "target": 0, "pct": 100}, "reneg": {"actual": 1, "target": 1, "pct": 100.0}, "mktg": {"actual": 0, "target": 10, "pct": 0.0}, "smart": {"actual": 36, "target": 20, "pct": 180.0}, "ads": {"actual": 8, "target": 7, "pct": 114.3}, "boltplus": {"actual": 127, "target": 71, "pct": 178.9}}}];
+const AM_TARGETS = {"Gabriela Ziółek": {"churn": 0, "reneg": 4, "mktg": 25, "smart": 30, "ads": 22, "boltplus": 173}, "Patrycja Konfederak": {"churn": 0, "reneg": 3, "mktg": 25, "smart": 60, "ads": 10, "boltplus": 127}, "Weronika Słomska": {"churn": 0, "reneg": 1, "mktg": 10, "smart": 20, "ads": 7, "boltplus": 71}};
+const KPI_WEIGHTS = {"churn": 0.2, "reneg": 0.2, "mktg": 0.1, "smart": 0.15, "ads": 0.2, "boltplus": 0.15};
+
+const KPI_LABELS = {
+  churn:    'Regrettable Churn',
+  reneg:    'Renegotiations',
+  mktg:     'Mktg Campaigns',
+  smart:    'Smart Promos',
+  ads:      'Merchant Ads',
+  boltplus: 'Bolt+ Enrolments',
+};
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function showTab(id, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  if (btn) btn.classList.add('active');
+}
+
+// ── Formatters ─────────────────────────────────────────────────────────────
+function fmtEur(v) {
+  if (!v && v !== 0) return '—';
+  if (v >= 1e6) return '€' + (v/1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return '€' + (v/1e3).toFixed(1) + 'k';
+  return '€' + v.toFixed(2);
+}
+function fmtNum(v) {
+  if (!v && v !== 0) return '—';
+  if (v >= 1e6) return (v/1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return (v/1e3).toFixed(1) + 'k';
+  return v.toFixed(0);
+}
+function fmtPct(v, decimals=1) {
+  if (v === null || v === undefined) return '—';
+  return v.toFixed(decimals) + '%';
+}
+function wowClass(v, invert=false) {
+  if (v === null || v === undefined) return 'wow-neut';
+  const good = invert ? v < 0 : v > 0;
+  return good ? 'wow-up' : v === 0 ? 'wow-neut' : 'wow-down';
+}
+function fmtWow(v, suffix='%', is_pp=false) {
+  if (v === null || v === undefined) return '—';
+  const sign = v >= 0 ? '+' : '';
+  const s = is_pp ? 'pp' : suffix;
+  return sign + v.toFixed(1) + s;
+}
+
+// ── Overview KPI cards ─────────────────────────────────────────────────────
+function renderKpiGrid() {
+  const g = document.getElementById('kpiGrid');
+  const kpis = [
+    { label:'GMV',          val: fmtEur(TOTALS.gmv),        wow: TOTALS.gmv_wow,    wowFmt: fmtWow(TOTALS.gmv_wow),    inv:false },
+    { label:'Orders',       val: fmtNum(TOTALS.orders),     wow: TOTALS.orders_wow, wowFmt: fmtWow(TOTALS.orders_wow), inv:false },
+    { label:'CML2%',        val: fmtPct(TOTALS.cml2_pct,2), wow: null,              wowFmt:'',                         inv:false },
+    { label:'DI%',          val: fmtPct(TOTALS.di_pct,2),   wow: null,              wowFmt:'',                         inv:true  },
+    { label:'CPO',          val: fmtEur(TOTALS.cpo),        wow: null,              wowFmt:'',                         inv:true  },
+    { label:'Courier Util', val: fmtPct(TOTALS.util_pct),   wow: null,              wowFmt:'',                         inv:false },
+    { label:'Courier AR%',  val: fmtPct(TOTALS.ar_pct),     wow: null,              wowFmt:'',                         inv:false },
+    { label:'BO%',          val: fmtPct(TOTALS.bo_pct,2),   wow: null,              wowFmt:'',                         inv:true  },
+  ];
+  g.innerHTML = kpis.map(k => `
+    <div class="kpi-card">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value" data-counter="${k.val}">${k.val}</div>
+      ${k.wow !== null ? `<div class="kpi-wow ${wowClass(k.wow, k.inv)}">${k.wowFmt} WoW</div>` : ''}
+    </div>`).join('');
+}
+
+// ── City movers ────────────────────────────────────────────────────────────
+function renderMovers() {
+  const g = document.getElementById('moversGrid');
+  const sorted = [...CITIES].filter(c => c.orders_wow !== null);
+  const gainers  = [...sorted].sort((a,b) => b.orders_wow - a.orders_wow).slice(0,4);
+  const decliners= [...sorted].sort((a,b) => a.orders_wow - b.orders_wow).slice(0,4);
+
+  function rows(list, inv) {
+    return list.map(c => `
+      <div class="mover-row">
+        <span class="mover-city">${c.name}</span>
+        <span class="mover-delta ${wowClass(c.orders_wow, inv)}">${fmtWow(c.orders_wow)}</span>
+      </div>`).join('');
+  }
+
+  g.innerHTML = `
+    <div class="movers-card">
+      <h3>📈 Gainers</h3>
+      ${rows(gainers, false)}
+    </div>
+    <div class="movers-card">
+      <h3>📉 Decliners</h3>
+      ${rows(decliners, true)}
+    </div>`;
+}
+
+// ── City table ─────────────────────────────────────────────────────────────
+let sortCol = 'gmv', sortAsc = false;
+
+function renderCityTable() {
+  const tbody = document.getElementById('cityTableBody');
+  const data  = [...CITIES];
+  data.sort((a,b) => {
+    const av = a[sortCol], bv = b[sortCol];
+    if (av === null && bv === null) return 0;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return sortAsc ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
+  });
+
+  // Totals row
+  const T = TOTALS;
+  function wowCell(v, inv=false, is_pp=false) {
+    if (v === null || v === undefined) return '';
+    const cls = wowClass(v, inv);
+    return `<span class="cell-wow ${cls}">${fmtWow(v, '%', is_pp)}</span>`;
+  }
+
+  tbody.innerHTML = data.map(c => `
+    <tr>
+      <td>${c.name}</td>
+      <td>${fmtEur(c.gmv)}  ${wowCell(c.gmv_wow)}</td>
+      <td class="${wowClass(c.gmv_wow)}">${c.gmv_wow!==null?fmtWow(c.gmv_wow):'—'}</td>
+      <td>${fmtNum(c.orders)} ${wowCell(c.orders_wow)}</td>
+      <td class="${wowClass(c.orders_wow)}">${c.orders_wow!==null?fmtWow(c.orders_wow):'—'}</td>
+      <td>${fmtPct(c.cml2_pct,2)}</td>
+      <td class="${wowClass(c.cml2_wow)}">${c.cml2_wow!==null?fmtWow(c.cml2_wow,'%',true):'—'}</td>
+      <td>${fmtPct(c.di_pct,2)}</td>
+      <td class="${wowClass(c.di_wow,true)}">${c.di_wow!==null?fmtWow(c.di_wow,'%',true):'—'}</td>
+      <td>${fmtEur(c.cpo)}</td>
+      <td class="${wowClass(c.cpo_wow,true)}">${c.cpo_wow!==null?fmtWow(c.cpo_wow,'%',true):'—'}</td>
+      <td>${fmtPct(c.util_pct)}</td>
+      <td>${fmtPct(c.ar_pct)}</td>
+      <td class="${c.bo_pct>10?'wow-down':''}">${fmtPct(c.bo_pct,2)}</td>
+      <td>${fmtNum(c.merchants)}</td>
+    </tr>`).join('') + `
+    <tr class="total-row">
+      <td>All Cities</td>
+      <td>${fmtEur(T.gmv)}</td>
+      <td class="${wowClass(T.gmv_wow)}">${T.gmv_wow!==null?fmtWow(T.gmv_wow):'—'}</td>
+      <td>${fmtNum(T.orders)}</td>
+      <td class="${wowClass(T.orders_wow)}">${T.orders_wow!==null?fmtWow(T.orders_wow):'—'}</td>
+      <td>${fmtPct(T.cml2_pct,2)}</td>
+      <td>—</td>
+      <td>${fmtPct(T.di_pct,2)}</td>
+      <td>—</td>
+      <td>${fmtEur(T.cpo)}</td>
+      <td>—</td>
+      <td>${fmtPct(T.util_pct)}</td>
+      <td>${fmtPct(T.ar_pct)}</td>
+      <td>${fmtPct(T.bo_pct,2)}</td>
+      <td>${fmtNum(T.merchants)}</td>
+    </tr>`;
+
+  document.querySelectorAll('.city-table th').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (th.dataset.col === sortCol) {
+      th.classList.add(sortAsc ? 'sorted-asc' : 'sorted-desc');
+    }
+  });
+}
+
+document.querySelectorAll('.city-table th').forEach(th => {
+  th.addEventListener('click', () => {
+    if (sortCol === th.dataset.col) sortAsc = !sortAsc;
+    else { sortCol = th.dataset.col; sortAsc = false; }
+    renderCityTable();
+  });
+});
+
+// ── AM KPI cards ────────────────────────────────────────────────────────────
+function renderAmGrid() {
+  const g = document.getElementById('amGrid');
+  g.innerHTML = AM_KPIS.map(am => {
+    const scoreColor = am.score >= 90 ? 'fill-green' : am.score >= 70 ? 'fill-amber' : 'fill-red';
+    const kpiRows = Object.entries(am.kpis).map(([key, k]) => {
+      const pct = Math.min(k.pct, 130);
+      const fillClass = key === 'churn'
+        ? (k.actual === 0 ? 'fill-green' : 'fill-red')
+        : pct >= 90 ? 'fill-green' : pct >= 60 ? 'fill-amber' : 'fill-red';
+      const label = KPI_LABELS[key] || key;
+      return `
+        <div class="kpi-row">
+          <div class="kpi-row-header">
+            <span class="kpi-name">${label}</span>
+            <span class="kpi-val">${k.actual} / ${k.target} (${k.pct.toFixed(0)}%)</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill ${fillClass}" style="width:${Math.min(pct, 100).toFixed(1)}%"></div>
+          </div>
+        </div>`;
+    }).join('');
+    return `
+      <div class="am-card">
+        <div class="am-name">${am.name}</div>
+        <div class="am-score">Overall score: <span>${am.score}%</span></div>
+        ${kpiRows}
+      </div>`;
+  }).join('');
+
+  // Weight badges
+  const wr = document.getElementById('weightsRow');
+  wr.innerHTML = Object.entries(KPI_WEIGHTS).map(([k,w]) => `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:12px;">
+      <span style="color:var(--text3)">${KPI_LABELS[k]}</span>
+      <span style="font-weight:700;color:var(--accent);margin-left:6px">${(w*100).toFixed(0)}%</span>
+    </div>`).join('');
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+renderKpiGrid();
+renderMovers();
+renderCityTable();
+renderAmGrid();
+</script>
+</body>
+</html>
