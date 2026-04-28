@@ -349,16 +349,27 @@ totals = {
     'bo_pct':   _wavg('bo_pct', weight='orders'),
 }
 
-# Previous week totals for WoW
-prev_totals = defaultdict(float)
-for name, periods in city_metrics.items():
-    prev = periods.get('prev', {})
-    for k, v in prev.items():
-        prev_totals[k] += v
+# Previous week weighted averages for total WoW
+def _prev_wavg(key, weight='gmv'):
+    total_w = sum(p.get('prev', {}).get(weight, 0) for p in city_metrics.values())
+    if not total_w:
+        return 0
+    return sum(
+        p.get('prev', {}).get(key, 0) * p.get('prev', {}).get(weight, 0)
+        for p in city_metrics.values()
+    ) / total_w
+
+prev_gmv    = sum(p.get('prev', {}).get('gmv', 0) for p in city_metrics.values())
+prev_orders = sum(p.get('prev', {}).get('orders', 0) for p in city_metrics.values())
 
 total_wows = {
-    'gmv_wow':    _wow(totals['gmv'], prev_totals.get('gmv', 0)),
-    'orders_wow': _wow(totals['orders'], prev_totals.get('orders', 0)),
+    'gmv_wow':    _wow(totals['gmv'], prev_gmv),
+    'orders_wow': _wow(totals['orders'], prev_orders),
+    'cml2_wow':   round(totals['cml2_pct'] - _prev_wavg('cml2_pct'), 2),
+    'di_wow':     round(totals['di_pct']   - _prev_wavg('di_pct'), 2),
+    'cpo_wow':    round(totals['cpo']      - _prev_wavg('cpo', 'orders'), 2),
+    'util_wow':   round(totals['util_pct'] - _prev_wavg('util_pct', 'orders'), 2),
+    'ar_wow':     round(totals['ar_pct']   - _prev_wavg('ar_pct', 'orders'), 2),
 }
 
 # ── Process AM KPIs ───────────────────────────────────────────────────────────
@@ -669,7 +680,9 @@ body {{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-ser
               <th data-col="cpo"       data-type="num">CPO</th>
               <th data-col="cpo_wow"   data-type="num">CPO Δ</th>
               <th data-col="util_pct"  data-type="num">Util%</th>
+              <th data-col="util_wow"  data-type="num">Util Δ</th>
               <th data-col="ar_pct"    data-type="num">AR%</th>
+              <th data-col="ar_wow"    data-type="num">AR Δ</th>
               <th data-col="bo_pct"    data-type="num">BO%</th>
             </tr>
           </thead>
@@ -742,20 +755,20 @@ function fmtDelta(v, pp) {{
 function renderKpiRow() {{
   const g = document.getElementById('kpiRow');
   const cards = [
-    {{ label:'GMV',          val:fmtEur(TOTALS.gmv),        delta:TOTALS.gmv_wow,    inv:false }},
-    {{ label:'Orders',       val:fmtNum(TOTALS.orders),     delta:TOTALS.orders_wow, inv:false }},
-    {{ label:'CML2%',        val:fmtPct(TOTALS.cml2_pct,2), delta:null,              inv:false }},
-    {{ label:'DI%',          val:fmtPct(TOTALS.di_pct,2),   delta:null,              inv:true  }},
-    {{ label:'CPO',          val:fmtEur(TOTALS.cpo),        delta:null,              inv:true  }},
-    {{ label:'Courier Util', val:fmtPct(TOTALS.util_pct),   delta:null,              inv:false }},
-    {{ label:'Courier AR%',  val:fmtPct(TOTALS.ar_pct),     delta:null,              inv:false }},
-    {{ label:'BO%',          val:fmtPct(TOTALS.bo_pct,2),   delta:null,              inv:true  }},
+    {{ label:'GMV',          val:fmtEur(TOTALS.gmv),        delta:TOTALS.gmv_wow,    pp:false, inv:false }},
+    {{ label:'Orders',       val:fmtNum(TOTALS.orders),     delta:TOTALS.orders_wow, pp:false, inv:false }},
+    {{ label:'CML2%',        val:fmtPct(TOTALS.cml2_pct,2), delta:TOTALS.cml2_wow,   pp:true,  inv:false }},
+    {{ label:'DI%',          val:fmtPct(TOTALS.di_pct,2),   delta:TOTALS.di_wow,     pp:true,  inv:true  }},
+    {{ label:'CPO',          val:fmtEur(TOTALS.cpo),        delta:TOTALS.cpo_wow,    pp:true,  inv:true  }},
+    {{ label:'Courier Util', val:fmtPct(TOTALS.util_pct),   delta:TOTALS.util_wow,   pp:true,  inv:false }},
+    {{ label:'Courier AR%',  val:fmtPct(TOTALS.ar_pct),     delta:TOTALS.ar_wow,     pp:true,  inv:false }},
+    {{ label:'BO%',          val:fmtPct(TOTALS.bo_pct,2),   delta:null,              pp:true,  inv:true  }},
   ];
   g.innerHTML = cards.map(c => `
     <div class="kpi-card">
       <div class="kpi-label">${{c.label}}</div>
       <div class="kpi-value">${{c.val}}</div>
-      ${{c.delta !== null ? `<div class="kpi-delta ${{deltaClass(c.delta, c.inv)}}">${{fmtDelta(c.delta)}} WoW</div>` : ''}}
+      ${{c.delta !== null ? `<div class="kpi-delta ${{deltaClass(c.delta, c.inv)}}">${{fmtDelta(c.delta, c.pp)}} WoW</div>` : ''}}
     </div>`).join('');
 }}
 
@@ -845,7 +858,9 @@ function renderCityTable() {{
     <td>${{fmtEur(c.cpo)}}</td>
     <td${{dc(c.cpo_wow,true)}}>${{fmtDelta(c.cpo_wow,true)}}</td>
     <td>${{fmtPct(c.util_pct)}}</td>
+    <td${{dc(c.util_wow,false)}}>${{fmtDelta(c.util_wow,true)}}</td>
     <td>${{fmtPct(c.ar_pct)}}</td>
+    <td${{dc(c.ar_wow,false)}}>${{fmtDelta(c.ar_wow,true)}}</td>
     <td${{c.bo_pct>10?' class="delta-down"':''}}>${{fmtPct(c.bo_pct,2)}}</td>
   </tr>`).join('') + `<tr class="total-row">
     <td>All Cities</td>
@@ -853,11 +868,16 @@ function renderCityTable() {{
     <td${{dc(T.gmv_wow,false)}}>${{fmtDelta(T.gmv_wow)}}</td>
     <td>${{fmtNum(T.orders)}}</td>
     <td${{dc(T.orders_wow,false)}}>${{fmtDelta(T.orders_wow)}}</td>
-    <td>${{fmtPct(T.cml2_pct,2)}}</td><td>—</td>
-    <td>${{fmtPct(T.di_pct,2)}}</td><td>—</td>
-    <td>${{fmtEur(T.cpo)}}</td><td>—</td>
+    <td>${{fmtPct(T.cml2_pct,2)}}</td>
+    <td${{dc(T.cml2_wow,false)}}>${{fmtDelta(T.cml2_wow,true)}}</td>
+    <td>${{fmtPct(T.di_pct,2)}}</td>
+    <td${{dc(T.di_wow,true)}}>${{fmtDelta(T.di_wow,true)}}</td>
+    <td>${{fmtEur(T.cpo)}}</td>
+    <td${{dc(T.cpo_wow,true)}}>${{fmtDelta(T.cpo_wow,true)}}</td>
     <td>${{fmtPct(T.util_pct)}}</td>
+    <td${{dc(T.util_wow,false)}}>${{fmtDelta(T.util_wow,true)}}</td>
     <td>${{fmtPct(T.ar_pct)}}</td>
+    <td${{dc(T.ar_wow,false)}}>${{fmtDelta(T.ar_wow,true)}}</td>
     <td>${{fmtPct(T.bo_pct,2)}}</td>
   </tr>`;
 
