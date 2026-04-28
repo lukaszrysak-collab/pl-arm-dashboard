@@ -162,6 +162,20 @@ WHERE pd.observation_date >= '{month_start}'
 GROUP BY d.am_managers
 """
 
+# Daily orders per city for sparklines (last 14 days)
+SPARKLINE_SQL = f"""
+SELECT
+    d.city_id,
+    d.metric_timestamp_partition AS day,
+    SUM(d.users_delivered_orders_count) AS orders
+FROM spark_catalog.ng_delivery_spark.fact_delivery_city_daily d
+WHERE d.city_id IN ({CITY_IDS_CSV})
+  AND d.metric_timestamp_partition >= '{(curr_sun - timedelta(days=13)).isoformat()}'
+  AND d.metric_timestamp_partition <= '{curr_sun.isoformat()}'
+GROUP BY d.city_id, d.metric_timestamp_partition
+ORDER BY d.city_id, day
+"""
+
 # ── Fetch all data ────────────────────────────────────────────────────────────
 
 def _run(dbx, sql, label):
@@ -183,6 +197,7 @@ with DBX() as dbx:
     df_ads     = _run(dbx, ADS_SQL,         'Merchant Ads')
     df_mktg    = _run(dbx, MKTG_SQL,        'Marketing Campaigns')
     df_churn   = _run(dbx, CHURN_SQL,       'Churn')
+    df_spark   = _run(dbx, SPARKLINE_SQL,   'Sparklines')
 
 # ── Process city metrics ──────────────────────────────────────────────────────
 
@@ -289,6 +304,30 @@ for name, periods in city_metrics.items():
 
 cities_out.sort(key=lambda c: c['gmv'], reverse=True)
 
+# Sparkline data per city (14-day daily orders)
+city_sparklines = defaultdict(list)
+if df_spark is not None:
+    for _, r in df_spark.sort_values('day').iterrows():
+        cid = int(_f(r['city_id']))
+        name = CITY_ID_MAP.get(cid)
+        if name:
+            city_sparklines[name].append(round(_f(r['orders']), 0))
+
+for c in cities_out:
+    c['spark'] = city_sparklines.get(c['name'], [])
+
+CITY_COLORS = {
+    'Krakow':    '#34D186',
+    'Poznan':    '#3b82f6',
+    'Gdansk':    '#14b8a6',
+    'Wroclaw':   '#8b5cf6',
+    'Lublin':    '#f59e0b',
+    'Bialystok': '#ec4899',
+    'Lodz':      '#06b6d4',
+    'Silesia':   '#f97316',
+    'Torun':     '#84cc16',
+}
+
 # Aggregate totals
 def _sum(key):
     return sum(c[key] for c in cities_out)
@@ -350,7 +389,6 @@ def _kpi_score(am):
         actual  = am_actuals[kpi][am]
         target  = targets[kpi]
         if kpi == 'churn':
-            # Lower = better; 0 churn = 100%, any churn = 0% for now
             achievement = 1.0 if actual == 0 else 0.0
         elif target == 0:
             achievement = 1.0
@@ -375,9 +413,10 @@ for am in AM_NAMES:
 
 # ── Serialize data for JS ─────────────────────────────────────────────────────
 
-cities_json  = json.dumps(cities_out,  ensure_ascii=False)
-totals_json  = json.dumps({**totals, **total_wows}, ensure_ascii=False)
-am_kpis_json = json.dumps(am_kpis, ensure_ascii=False)
+cities_json      = json.dumps(cities_out,  ensure_ascii=False)
+totals_json      = json.dumps({**totals, **total_wows}, ensure_ascii=False)
+am_kpis_json     = json.dumps(am_kpis, ensure_ascii=False)
+city_colors_json = json.dumps(CITY_COLORS, ensure_ascii=False)
 
 week_label = f"W{curr_mon.isocalendar()[1]} ({curr_mon.strftime('%-d %b')}–{curr_sun.strftime('%-d %b %Y')})"
 
@@ -388,516 +427,393 @@ HTML = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bolt Food Poland — Area Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/apexcharts@3.44.0/dist/apexcharts.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/gsap@3.12.2/dist/gsap.min.js"></script>
+<title>Poland ARM Dashboard — Bolt Food</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="theme.js"></script>
 <style>
 :root {{
-  --bg:         #0f0f1a;
-  --surface:    #16162a;
-  --surface2:   #1e1e35;
-  --border:     #2a2a45;
-  --text:       #f0f0f5;
-  --text2:      #a0a0be;
-  --text3:      #6b6b88;
-  --accent:     #34D186;
-  --accent2:    #3b82f6;
-  --accent3:    #f59e0b;
-  --danger:     #ef4444;
-  --purple:     #8b5cf6;
-  --radius:     12px;
+  --bg:           #0e0e1a;
+  --bg-card:      #161626;
+  --bg-sidebar:   #111120;
+  --border:       #252538;
+  --border-hover: #3a3a58;
+  --accent:       #34D186;
+  --accent-light: rgba(52,209,134,0.10);
+  --accent2:      #3b82f6;
+  --accent3:      #f59e0b;
+  --danger:       #ef4444;
+  --purple:       #8b5cf6;
+  --text:         #f0f0f5;
+  --text-secondary: #b0b0cc;
+  --text-muted:   #6b6b88;
+  --shadow-sm:    0 1px 4px rgba(0,0,0,0.25);
+  --shadow-md:    0 4px 16px rgba(0,0,0,0.35);
+  --radius:       12px;
+  --radius-sm:    8px;
 }}
 [data-theme="light"] {{
-  --bg:       #f2f3f7;
-  --surface:  #ffffff;
-  --surface2: #f0f0f8;
-  --border:   #dfe1e8;
-  --text:     #1a1a2e;
-  --text2:    #4a4a60;
-  --text3:    #71717a;
+  --bg:           #f1f2f6;
+  --bg-card:      #ffffff;
+  --bg-sidebar:   #ffffff;
+  --border:       #e2e3ec;
+  --border-hover: #c0c0d8;
+  --accent-light: rgba(52,209,134,0.08);
+  --text:         #1a1a2e;
+  --text-secondary: #4a4a6a;
+  --text-muted:   #8a8aaa;
+  --shadow-sm:    0 1px 4px rgba(0,0,0,0.08);
+  --shadow-md:    0 4px 16px rgba(0,0,0,0.12);
 }}
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  display: flex;
-  height: 100vh;
-  overflow: hidden;
-}}
+* {{ box-sizing:border-box; margin:0; padding:0; }}
+body {{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:var(--bg); color:var(--text); line-height:1.5; overflow-x:hidden; }}
+
+/* ── App layout ── */
+.app-layout {{ display:flex; min-height:100vh; }}
 
 /* ── Sidebar ── */
-#sidebar {{
-  width: 220px;
-  flex-shrink: 0;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  padding: 20px 0;
-  overflow-y: auto;
-}}
-.sidebar-logo {{
-  padding: 0 20px 24px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}}
-.sidebar-logo span {{ color: var(--accent); }}
-.nav-section-label {{
-  padding: 0 20px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text3);
-}}
-.nav-btn {{
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 20px;
-  cursor: pointer;
-  border: none;
-  background: none;
-  color: var(--text2);
-  font-size: 13.5px;
-  width: 100%;
-  text-align: left;
-  transition: all .15s;
-  border-left: 3px solid transparent;
-}}
-.nav-btn:hover {{ background: rgba(255,255,255,0.04); color: var(--text); }}
-.nav-btn.active {{
-  background: rgba(52,209,134,0.08);
-  color: var(--accent);
-  border-left-color: var(--accent);
-  font-weight: 600;
-}}
-.sidebar-footer {{
-  margin-top: auto;
-  padding: 16px 20px 4px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}}
-.week-badge {{
-  font-size: 11px;
-  color: var(--text3);
-}}
-#themeToggleWrap {{ display: flex; }}
+.sidebar {{ width:225px; position:fixed; top:0; left:0; bottom:0; background:var(--bg-sidebar); border-right:1px solid var(--border); display:flex; flex-direction:column; padding:20px 12px; z-index:200; overflow-y:auto; scrollbar-width:none; }}
+.sidebar::-webkit-scrollbar {{ display:none; }}
+.sidebar-logo {{ display:flex; align-items:center; gap:10px; padding:0 6px; margin-bottom:28px; }}
+.sidebar-logo-icon {{ width:34px; height:34px; background:var(--accent); border-radius:9px; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:1.05em; flex-shrink:0; }}
+.sidebar-brand {{ font-weight:700; font-size:0.85em; color:var(--text); }}
+.sidebar-brand-sub {{ font-size:0.67em; color:var(--text-muted); font-weight:400; display:block; margin-top:1px; }}
+.sidebar-section {{ font-size:0.63em; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.8px; padding:18px 6px 8px; }}
+.sidebar-nav {{ display:flex; flex-direction:column; gap:2px; flex:1; }}
+.sidebar-item {{ display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:var(--radius-sm); color:var(--text-secondary); font-size:0.81em; font-weight:500; cursor:pointer; transition:all 0.15s ease; border:none; background:none; font-family:inherit; text-align:left; width:100%; }}
+.sidebar-item:hover {{ background:var(--accent-light); color:var(--text); }}
+.sidebar-item.active {{ background:var(--accent-light); color:var(--accent); font-weight:600; }}
+.sidebar-item i {{ width:17px; height:17px; flex-shrink:0; }}
+.sidebar-footer {{ margin-top:auto; padding:14px 6px 0; border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }}
+.sidebar-footer-week {{ font-size:0.65em; color:var(--text-muted); }}
 
-/* ── Main panel ── */
-#main {{
-  flex: 1;
-  overflow-y: auto;
-  padding: 28px 32px;
-}}
-.tab-panel {{ display: none; }}
-.tab-panel.active {{ display: block; }}
+/* ── Main content ── */
+.main-content {{ margin-left:225px; flex:1; display:flex; flex-direction:column; min-width:0; }}
+.top-bar {{ display:flex; align-items:center; gap:10px; padding:10px 24px; border-bottom:1px solid var(--border); background:var(--bg-card); position:sticky; top:0; z-index:100; }}
+.top-bar-title {{ font-size:0.82em; font-weight:700; color:var(--text); }}
+.top-bar-sub {{ font-size:0.7em; color:var(--text-muted); margin-left:4px; }}
+.top-bar-spacer {{ flex:1; }}
+.content-area {{ padding:20px 24px; flex:1; overflow-y:auto; scrollbar-width:none; }}
+.content-area::-webkit-scrollbar {{ display:none; }}
 
-/* ── Page header ── */
-.page-header {{
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 28px;
-}}
-.page-title {{
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text);
-}}
-.page-sub {{
-  font-size: 13px;
-  color: var(--text3);
-}}
+/* ── Tab panels ── */
+.tab-panel {{ display:none; }}
+.tab-panel.active {{ display:block; }}
 
-/* ── KPI cards ── */
-.kpi-grid {{
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 16px;
-  margin-bottom: 28px;
-}}
-.kpi-card {{
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px 22px;
-  transition: border-color .2s;
-}}
-.kpi-card:hover {{ border-color: var(--accent); }}
-.kpi-label {{
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text3);
-  margin-bottom: 8px;
-}}
-.kpi-value {{
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text);
-  line-height: 1;
-  margin-bottom: 8px;
-}}
-.kpi-wow {{
-  font-size: 12px;
-  font-weight: 600;
-}}
-.wow-up   {{ color: var(--accent); }}
-.wow-down {{ color: var(--danger); }}
-.wow-neut {{ color: var(--text3); }}
+/* ── Section title ── */
+.section-title {{ font-size:0.88em; font-weight:700; color:var(--text); display:flex; align-items:center; gap:8px; margin:0 0 12px 0; }}
+.section-title .accent-bar {{ width:3px; height:18px; background:var(--accent); border-radius:2px; flex-shrink:0; }}
 
-/* ── Section header ── */
-.section-header {{
-  font-size: 13px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text3);
-  margin-bottom: 14px;
-  margin-top: 8px;
-}}
+/* ── KPI row (overview top) ── */
+.kpi-row {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }}
+@media (max-width:1100px) {{ .kpi-row {{ grid-template-columns:repeat(2,1fr); }} }}
+.kpi-card {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; transition:all 0.2s ease; }}
+.kpi-card:hover {{ border-color:var(--border-hover); box-shadow:var(--shadow-md); }}
+.kpi-label {{ font-size:0.62em; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px; }}
+.kpi-value {{ font-size:1.5em; font-weight:800; letter-spacing:-0.03em; color:var(--text); line-height:1.1; }}
+.kpi-delta {{ font-size:0.72em; font-weight:600; margin-top:4px; }}
+.delta-up   {{ color:var(--accent); }}
+.delta-down {{ color:var(--danger); }}
+.delta-neut {{ color:var(--text-muted); }}
 
-/* ── City table ── */
-.city-table-wrap {{
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: auto;
-  margin-bottom: 28px;
-}}
-.city-table {{
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}}
-.city-table th {{
-  padding: 12px 14px;
-  text-align: right;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text3);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-  cursor: pointer;
-  user-select: none;
-  background: var(--surface);
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}}
-.city-table th:first-child {{ text-align: left; }}
-.city-table th:hover {{ color: var(--accent); }}
-.city-table th .sort-icon {{ margin-left: 4px; opacity: 0.4; }}
-.city-table th.sorted-asc .sort-icon::after  {{ content: ' ↑'; opacity: 1; color: var(--accent); }}
-.city-table th.sorted-desc .sort-icon::after {{ content: ' ↓'; opacity: 1; color: var(--accent); }}
-.city-table td {{
-  padding: 11px 14px;
-  text-align: right;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-}}
-.city-table td:first-child {{ text-align: left; font-weight: 600; }}
-.city-table tr:last-child td {{ border-bottom: none; }}
-.city-table tr:hover td {{ background: rgba(255,255,255,0.02); }}
-.city-table .total-row td {{
-  font-weight: 700;
-  color: var(--accent);
-  border-top: 2px solid var(--border);
-}}
-.cell-wow {{ font-size: 11px; display: block; margin-top: 2px; }}
+/* ── Overview bottom grid ── */
+.overview-bottom {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }}
+.dash-card {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow-sm); transition:all 0.2s ease; }}
+.dash-card:hover {{ box-shadow:var(--shadow-md); border-color:var(--border-hover); }}
 
-/* ── AM KPI cards ── */
-.am-grid {{
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 20px;
-  margin-bottom: 28px;
-}}
-.am-card {{
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 22px 24px;
-}}
-.am-name {{
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 4px;
-}}
-.am-score {{
-  font-size: 12px;
-  color: var(--text3);
-  margin-bottom: 18px;
-}}
-.am-score span {{ font-weight: 700; color: var(--accent); font-size: 18px; }}
-.kpi-row {{
-  margin-bottom: 12px;
-}}
-.kpi-row-header {{
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  margin-bottom: 5px;
-  color: var(--text2);
-}}
-.kpi-row-header .kpi-name {{ font-weight: 600; }}
-.kpi-row-header .kpi-val {{ color: var(--text3); }}
-.progress-bar-bg {{
-  height: 6px;
-  background: var(--surface2);
-  border-radius: 4px;
-  overflow: hidden;
-}}
-.progress-bar-fill {{
-  height: 100%;
-  border-radius: 4px;
-  transition: width 0.8s cubic-bezier(0.25,0.46,0.45,0.94);
-}}
-.fill-green  {{ background: var(--accent); }}
-.fill-amber  {{ background: var(--accent3); }}
-.fill-red    {{ background: var(--danger); }}
-.fill-purple {{ background: var(--purple); }}
+/* ── City mini-cards ── */
+.city-mini-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }}
+.city-mini {{ background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; cursor:pointer; transition:all 0.2s; display:flex; flex-direction:column; }}
+.city-mini:hover {{ border-color:var(--border-hover); box-shadow:var(--shadow-sm); }}
+.city-mini-name {{ font-size:0.73em; font-weight:700; color:var(--text); margin-bottom:3px; }}
+.city-mini-val {{ font-size:1.05em; font-weight:800; color:var(--text); line-height:1; }}
+.city-mini-sub {{ font-size:0.62em; color:var(--text-muted); margin-top:2px; }}
+.city-mini-spark {{ height:30px; margin-top:6px; }}
+.city-mini-spark svg {{ width:100%; height:100%; }}
 
 /* ── Movers ── */
-.movers-grid {{
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  margin-bottom: 28px;
-}}
-.movers-card {{
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-}}
-.movers-card h3 {{
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text3);
-  margin-bottom: 14px;
-}}
-.mover-row {{
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-}}
-.mover-row:last-child {{ border-bottom: none; }}
-.mover-city {{ font-weight: 600; }}
-.mover-delta {{ font-weight: 700; }}
+.mover-row {{ display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid var(--border); font-size:0.8em; }}
+.mover-row:last-child {{ border-bottom:none; }}
+.mover-rank {{ width:18px; font-weight:700; font-size:0.72em; color:var(--text-muted); text-align:center; flex-shrink:0; }}
+.mover-city {{ font-weight:600; flex:1; color:var(--text); }}
+.mover-delta {{ font-weight:700; font-size:0.82em; white-space:nowrap; min-width:46px; text-align:right; }}
+.mover-bar {{ flex:0 0 50px; height:5px; border-radius:3px; background:var(--border); overflow:hidden; }}
+.mover-bar-fill {{ height:100%; border-radius:3px; transition:width 0.8s ease; }}
+.movers-subhead {{ font-size:0.68em; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }}
 
-/* ── Responsive ── */
-@media (max-width: 900px) {{
-  #sidebar {{ display: none; }}
-  #main {{ padding: 16px; }}
-}}
+/* ── City table ── */
+.city-table-wrap {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); overflow:auto; margin-bottom:20px; }}
+.city-table {{ width:100%; border-collapse:collapse; font-size:0.78em; }}
+.city-table th {{ padding:11px 13px; text-align:right; font-size:0.68em; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); border-bottom:1px solid var(--border); white-space:nowrap; cursor:pointer; user-select:none; background:var(--bg-card); position:sticky; top:0; z-index:1; }}
+.city-table th:first-child {{ text-align:left; }}
+.city-table th:hover {{ color:var(--accent); }}
+.city-table th.sorted-asc::after  {{ content:' ↑'; color:var(--accent); }}
+.city-table th.sorted-desc::after {{ content:' ↓'; color:var(--accent); }}
+.city-table td {{ padding:10px 13px; text-align:right; border-bottom:1px solid var(--border); color:var(--text); }}
+.city-table td:first-child {{ text-align:left; font-weight:700; }}
+.city-table tr:last-child td {{ border-bottom:none; }}
+.city-table tr:hover td {{ background:rgba(255,255,255,0.015); }}
+.city-table .total-row td {{ font-weight:700; color:var(--accent); border-top:2px solid var(--border); }}
+
+/* ── AM KPI cards ── */
+.am-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px; margin-bottom:20px; }}
+.am-card {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:20px 22px; }}
+.am-card-header {{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }}
+.am-name {{ font-size:0.9em; font-weight:700; color:var(--text); }}
+.am-score-badge {{ padding:4px 10px; border-radius:20px; font-size:0.72em; font-weight:700; }}
+.score-green {{ background:rgba(52,209,134,0.15); color:var(--accent); }}
+.score-amber {{ background:rgba(245,158,11,0.15); color:var(--accent3); }}
+.score-red   {{ background:rgba(239,68,68,0.15);  color:var(--danger); }}
+.kpi-row-item {{ margin-bottom:11px; }}
+.kpi-row-header {{ display:flex; justify-content:space-between; font-size:0.72em; margin-bottom:4px; }}
+.kpi-row-name {{ font-weight:600; color:var(--text-secondary); }}
+.kpi-row-val  {{ color:var(--text-muted); }}
+.progress-bg   {{ height:5px; background:var(--border); border-radius:3px; overflow:hidden; }}
+.progress-fill {{ height:100%; border-radius:3px; transition:width 0.8s cubic-bezier(0.25,0.46,0.45,0.94); }}
+.fill-green  {{ background:var(--accent); }}
+.fill-amber  {{ background:var(--accent3); }}
+.fill-red    {{ background:var(--danger); }}
+.fill-purple {{ background:var(--purple); }}
+
+/* ── Weight pills ── */
+.weights-row {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:4px; }}
+.weight-pill {{ background:var(--bg-card); border:1px solid var(--border); border-radius:7px; padding:7px 13px; font-size:0.72em; }}
+.weight-name {{ color:var(--text-muted); }}
+.weight-val  {{ font-weight:700; color:var(--accent); margin-left:5px; }}
+
+@media (max-width:900px) {{ .sidebar {{ display:none; }} .main-content {{ margin-left:0; }} .overview-bottom {{ grid-template-columns:1fr; }} .city-mini-grid {{ grid-template-columns:1fr 1fr; }} }}
 </style>
-<script src="theme.js" defer></script>
 </head>
 <body>
+<div class="app-layout">
 
-<!-- Sidebar -->
-<nav id="sidebar">
+<!-- ── Sidebar ── -->
+<aside class="sidebar">
   <div class="sidebar-logo">
-    <span>⚡</span> PL ARM
+    <div class="sidebar-logo-icon">B</div>
+    <div>
+      <div class="sidebar-brand">PL ARM</div>
+      <span class="sidebar-brand-sub">Bolt Food Poland</span>
+    </div>
   </div>
 
-  <div class="nav-section-label">Analytics</div>
-  <button class="nav-btn active" onclick="showTab('overview',this)">
-    📊 Overview
-  </button>
-  <button class="nav-btn" onclick="showTab('cities',this)">
-    🏙️ Cities
-  </button>
-  <button class="nav-btn" onclick="showTab('am_kpis',this)">
-    🎯 AM KPIs
-  </button>
+  <div class="sidebar-section">Analytics</div>
+  <nav class="sidebar-nav">
+    <button class="sidebar-item active" onclick="showTab('overview',this)">
+      <i data-lucide="layout-dashboard"></i> Overview
+    </button>
+    <button class="sidebar-item" onclick="showTab('cities',this)">
+      <i data-lucide="map-pin"></i> Cities
+    </button>
+    <button class="sidebar-item" onclick="showTab('am_kpis',this)">
+      <i data-lucide="target"></i> AM KPIs
+    </button>
+  </nav>
 
   <div class="sidebar-footer">
-    <span class="week-badge">{week_label}</span>
+    <span class="sidebar-footer-week">{week_label}</span>
     <div id="themeToggleWrap"></div>
   </div>
-</nav>
+</aside>
 
-<!-- Main -->
-<main id="main">
-
-  <!-- Overview tab -->
-  <div id="tab-overview" class="tab-panel active">
-    <div class="page-header">
-      <span class="page-title">Poland Overview</span>
-      <span class="page-sub" id="overviewWeek">{week_label}</span>
-    </div>
-
-    <div class="kpi-grid" id="kpiGrid"></div>
-
-    <div class="section-header">City Movers (Orders WoW)</div>
-    <div class="movers-grid" id="moversGrid"></div>
+<!-- ── Main ── -->
+<div class="main-content">
+  <div class="top-bar">
+    <span class="top-bar-title">Poland ARM Dashboard</span>
+    <span class="top-bar-sub">{week_label}</span>
+    <div class="top-bar-spacer"></div>
+    <div id="themeToggleWrapTopBar"></div>
   </div>
 
-  <!-- Cities tab -->
-  <div id="tab-cities" class="tab-panel">
-    <div class="page-header">
-      <span class="page-title">City Breakdown</span>
-      <span class="page-sub">Click column headers to sort</span>
+  <div class="content-area">
+
+    <!-- Overview tab -->
+    <div id="tab-overview" class="tab-panel active">
+      <div class="kpi-row" id="kpiRow"></div>
+      <div class="overview-bottom">
+        <div class="dash-card">
+          <div class="section-title"><div class="accent-bar"></div>City Performance</div>
+          <div class="city-mini-grid" id="cityMiniGrid"></div>
+        </div>
+        <div class="dash-card">
+          <div class="section-title"><div class="accent-bar"></div>Top Movers — Orders WoW</div>
+          <div style="margin-bottom:16px">
+            <div class="movers-subhead">Gainers</div>
+            <div id="gainersRows"></div>
+          </div>
+          <div>
+            <div class="movers-subhead">Decliners</div>
+            <div id="declinersRows"></div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="city-table-wrap">
-      <table class="city-table" id="cityTable">
-        <thead>
-          <tr>
-            <th data-col="name"    data-type="str">City <span class="sort-icon"></span></th>
-            <th data-col="gmv"     data-type="num">GMV <span class="sort-icon"></span></th>
-            <th data-col="gmv_wow" data-type="num">GMV WoW <span class="sort-icon"></span></th>
-            <th data-col="orders"  data-type="num">Orders <span class="sort-icon"></span></th>
-            <th data-col="orders_wow" data-type="num">Ord WoW <span class="sort-icon"></span></th>
-            <th data-col="cml2_pct" data-type="num">CML2% <span class="sort-icon"></span></th>
-            <th data-col="cml2_wow" data-type="num">CML2 Δ <span class="sort-icon"></span></th>
-            <th data-col="di_pct"  data-type="num">DI% <span class="sort-icon"></span></th>
-            <th data-col="di_wow"  data-type="num">DI Δ <span class="sort-icon"></span></th>
-            <th data-col="cpo"     data-type="num">CPO <span class="sort-icon"></span></th>
-            <th data-col="cpo_wow" data-type="num">CPO Δ <span class="sort-icon"></span></th>
-            <th data-col="util_pct" data-type="num">Util% <span class="sort-icon"></span></th>
-            <th data-col="ar_pct"  data-type="num">AR% <span class="sort-icon"></span></th>
-            <th data-col="bo_pct"  data-type="num">BO% <span class="sort-icon"></span></th>
-            <th data-col="merchants" data-type="num">Merchants <span class="sort-icon"></span></th>
-          </tr>
-        </thead>
-        <tbody id="cityTableBody"></tbody>
-      </table>
+
+    <!-- Cities tab -->
+    <div id="tab-cities" class="tab-panel">
+      <div class="section-title"><div class="accent-bar"></div>City Breakdown — click headers to sort</div>
+      <div class="city-table-wrap">
+        <table class="city-table" id="cityTable">
+          <thead>
+            <tr>
+              <th data-col="name"      data-type="str">City</th>
+              <th data-col="gmv"       data-type="num">GMV</th>
+              <th data-col="gmv_wow"   data-type="num">GMV WoW</th>
+              <th data-col="orders"    data-type="num">Orders</th>
+              <th data-col="orders_wow" data-type="num">Ord WoW</th>
+              <th data-col="cml2_pct"  data-type="num">CML2%</th>
+              <th data-col="cml2_wow"  data-type="num">CML2 Δ</th>
+              <th data-col="di_pct"    data-type="num">DI%</th>
+              <th data-col="di_wow"    data-type="num">DI Δ</th>
+              <th data-col="cpo"       data-type="num">CPO</th>
+              <th data-col="cpo_wow"   data-type="num">CPO Δ</th>
+              <th data-col="util_pct"  data-type="num">Util%</th>
+              <th data-col="ar_pct"    data-type="num">AR%</th>
+              <th data-col="bo_pct"    data-type="num">BO%</th>
+            </tr>
+          </thead>
+          <tbody id="cityTableBody"></tbody>
+        </table>
+      </div>
     </div>
+
+    <!-- AM KPIs tab -->
+    <div id="tab-am_kpis" class="tab-panel">
+      <div class="section-title"><div class="accent-bar"></div>AM KPIs — Q2 2026 · Month-to-date vs monthly targets</div>
+      <div class="am-grid" id="amGrid"></div>
+      <div class="section-title" style="margin-top:8px"><div class="accent-bar"></div>KPI Weights</div>
+      <div class="weights-row" id="weightsRow"></div>
+    </div>
+
   </div>
-
-  <!-- AM KPIs tab -->
-  <div id="tab-am_kpis" class="tab-panel">
-    <div class="page-header">
-      <span class="page-title">AM KPIs — Q2 2026</span>
-      <span class="page-sub">Month-to-date vs monthly targets (Apr–Jun). Bonus: 90%–130% achievement.</span>
-    </div>
-    <div class="am-grid" id="amGrid"></div>
-
-    <div class="section-header">KPI Weights</div>
-    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:24px" id="weightsRow"></div>
-  </div>
-
-</main>
+</div>
+</div>
 
 <script>
-const CITIES  = {cities_json};
-const TOTALS  = {totals_json};
-const AM_KPIS = {am_kpis_json};
-const AM_TARGETS = {json.dumps(AM_TARGETS, ensure_ascii=False)};
+const CITIES      = {cities_json};
+const TOTALS      = {totals_json};
+const AM_KPIS     = {am_kpis_json};
+const AM_TARGETS  = {json.dumps(AM_TARGETS, ensure_ascii=False)};
 const KPI_WEIGHTS = {json.dumps(KPI_WEIGHTS, ensure_ascii=False)};
+const CITY_COLORS = {city_colors_json};
 
 const KPI_LABELS = {{
-  churn:    'Regrettable Churn',
-  reneg:    'Renegotiations',
-  mktg:     'Mktg Campaigns',
-  smart:    'Smart Promos',
-  ads:      'Merchant Ads',
-  boltplus: 'Bolt+ Enrolments',
+  churn:'Regrettable Churn', reneg:'Renegotiations', mktg:'Mktg Campaigns',
+  smart:'Smart Promos', ads:'Merchant Ads', boltplus:'Bolt+ Enrolments',
 }};
 
 // ── Tab switching ──────────────────────────────────────────────────────────
 function showTab(id, btn) {{
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.sidebar-item').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + id).classList.add('active');
   if (btn) btn.classList.add('active');
 }}
 
 // ── Formatters ─────────────────────────────────────────────────────────────
 function fmtEur(v) {{
-  if (!v && v !== 0) return '—';
+  if (v === null || v === undefined || isNaN(v)) return '—';
   if (v >= 1e6) return '€' + (v/1e6).toFixed(2) + 'M';
   if (v >= 1e3) return '€' + (v/1e3).toFixed(1) + 'k';
   return '€' + v.toFixed(2);
 }}
 function fmtNum(v) {{
-  if (!v && v !== 0) return '—';
+  if (v === null || v === undefined || isNaN(v)) return '—';
   if (v >= 1e6) return (v/1e6).toFixed(2) + 'M';
   if (v >= 1e3) return (v/1e3).toFixed(1) + 'k';
-  return v.toFixed(0);
+  return String(Math.round(v));
 }}
-function fmtPct(v, decimals=1) {{
+function fmtPct(v, d) {{
   if (v === null || v === undefined) return '—';
-  return v.toFixed(decimals) + '%';
+  return v.toFixed(d !== undefined ? d : 1) + '%';
 }}
-function wowClass(v, invert=false) {{
-  if (v === null || v === undefined) return 'wow-neut';
-  const good = invert ? v < 0 : v > 0;
-  return good ? 'wow-up' : v === 0 ? 'wow-neut' : 'wow-down';
+function deltaClass(v, inv) {{
+  if (v === null || v === undefined) return 'delta-neut';
+  const good = inv ? v < 0 : v > 0;
+  return good ? 'delta-up' : v === 0 ? 'delta-neut' : 'delta-down';
 }}
-function fmtWow(v, suffix='%', is_pp=false) {{
+function fmtDelta(v, pp) {{
   if (v === null || v === undefined) return '—';
-  const sign = v >= 0 ? '+' : '';
-  const s = is_pp ? 'pp' : suffix;
-  return sign + v.toFixed(1) + s;
+  return (v >= 0 ? '+' : '') + v.toFixed(1) + (pp ? 'pp' : '%');
 }}
 
-// ── Overview KPI cards ─────────────────────────────────────────────────────
-function renderKpiGrid() {{
-  const g = document.getElementById('kpiGrid');
-  const kpis = [
-    {{ label:'GMV',          val: fmtEur(TOTALS.gmv),        wow: TOTALS.gmv_wow,    wowFmt: fmtWow(TOTALS.gmv_wow),    inv:false }},
-    {{ label:'Orders',       val: fmtNum(TOTALS.orders),     wow: TOTALS.orders_wow, wowFmt: fmtWow(TOTALS.orders_wow), inv:false }},
-    {{ label:'CML2%',        val: fmtPct(TOTALS.cml2_pct,2), wow: null,              wowFmt:'',                         inv:false }},
-    {{ label:'DI%',          val: fmtPct(TOTALS.di_pct,2),   wow: null,              wowFmt:'',                         inv:true  }},
-    {{ label:'CPO',          val: fmtEur(TOTALS.cpo),        wow: null,              wowFmt:'',                         inv:true  }},
-    {{ label:'Courier Util', val: fmtPct(TOTALS.util_pct),   wow: null,              wowFmt:'',                         inv:false }},
-    {{ label:'Courier AR%',  val: fmtPct(TOTALS.ar_pct),     wow: null,              wowFmt:'',                         inv:false }},
-    {{ label:'BO%',          val: fmtPct(TOTALS.bo_pct,2),   wow: null,              wowFmt:'',                         inv:true  }},
+// ── Overview KPI row ───────────────────────────────────────────────────────
+function renderKpiRow() {{
+  const g = document.getElementById('kpiRow');
+  const cards = [
+    {{ label:'GMV',          val:fmtEur(TOTALS.gmv),        delta:TOTALS.gmv_wow,    inv:false }},
+    {{ label:'Orders',       val:fmtNum(TOTALS.orders),     delta:TOTALS.orders_wow, inv:false }},
+    {{ label:'CML2%',        val:fmtPct(TOTALS.cml2_pct,2), delta:null,              inv:false }},
+    {{ label:'DI%',          val:fmtPct(TOTALS.di_pct,2),   delta:null,              inv:true  }},
+    {{ label:'CPO',          val:fmtEur(TOTALS.cpo),        delta:null,              inv:true  }},
+    {{ label:'Courier Util', val:fmtPct(TOTALS.util_pct),   delta:null,              inv:false }},
+    {{ label:'Courier AR%',  val:fmtPct(TOTALS.ar_pct),     delta:null,              inv:false }},
+    {{ label:'BO%',          val:fmtPct(TOTALS.bo_pct,2),   delta:null,              inv:true  }},
   ];
-  g.innerHTML = kpis.map(k => `
+  g.innerHTML = cards.map(c => `
     <div class="kpi-card">
-      <div class="kpi-label">${{k.label}}</div>
-      <div class="kpi-value" data-counter="${{k.val}}">${{k.val}}</div>
-      ${{k.wow !== null ? `<div class="kpi-wow ${{wowClass(k.wow, k.inv)}}">${{k.wowFmt}} WoW</div>` : ''}}
+      <div class="kpi-label">${{c.label}}</div>
+      <div class="kpi-value">${{c.val}}</div>
+      ${{c.delta !== null ? `<div class="kpi-delta ${{deltaClass(c.delta, c.inv)}}">${{fmtDelta(c.delta)}} WoW</div>` : ''}}
     </div>`).join('');
 }}
 
-// ── City movers ────────────────────────────────────────────────────────────
-function renderMovers() {{
-  const g = document.getElementById('moversGrid');
-  const sorted = [...CITIES].filter(c => c.orders_wow !== null);
-  const gainers  = [...sorted].sort((a,b) => b.orders_wow - a.orders_wow).slice(0,4);
-  const decliners= [...sorted].sort((a,b) => a.orders_wow - b.orders_wow).slice(0,4);
+// ── Sparkline SVG ──────────────────────────────────────────────────────────
+function buildSparkline(values, color) {{
+  if (!values || values.length < 2) return '';
+  const W = 100, H = 30, pad = 2;
+  const mn = Math.min(...values), mx = Math.max(...values);
+  const range = mx - mn || 1;
+  const pts = values.map((v, i) => {{
+    const x = pad + i * (W - pad * 2) / (values.length - 1);
+    const y = H - pad - (v - mn) / range * (H - pad * 2);
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }}).join(' ');
+  return `<svg viewBox="0 0 ${{W}} ${{H}}" preserveAspectRatio="none">
+    <polyline points="${{pts}}" fill="none" stroke="${{color}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  </svg>`;
+}}
 
-  function rows(list, inv) {{
-    return list.map(c => `
-      <div class="mover-row">
-        <span class="mover-city">${{c.name}}</span>
-        <span class="mover-delta ${{wowClass(c.orders_wow, inv)}}">${{fmtWow(c.orders_wow)}}</span>
-      </div>`).join('');
+// ── City mini-grid ─────────────────────────────────────────────────────────
+function renderCityMini() {{
+  const g = document.getElementById('cityMiniGrid');
+  const citiesBtn = document.querySelectorAll('.sidebar-item')[1];
+  g.innerHTML = CITIES.map(c => {{
+    const color  = CITY_COLORS[c.name] || '#34D186';
+    const dClass = deltaClass(c.orders_wow, false);
+    const spark  = buildSparkline(c.spark, color);
+    const deltaStr = c.orders_wow !== null ? `<span class="${{dClass}}" style="margin-left:4px">${{fmtDelta(c.orders_wow)}}</span>` : '';
+    return `<div class="city-mini" style="border-top:3px solid ${{color}}" onclick="showTab('cities', document.querySelectorAll('.sidebar-item')[1])">
+      <div class="city-mini-name">${{c.name}}</div>
+      <div class="city-mini-val">${{fmtNum(c.orders)}}</div>
+      <div class="city-mini-sub">${{fmtEur(c.gmv)}}${{deltaStr}}</div>
+      <div class="city-mini-spark">${{spark}}</div>
+    </div>`;
+  }}).join('');
+}}
+
+// ── Movers ─────────────────────────────────────────────────────────────────
+function renderMovers() {{
+  const valid    = CITIES.filter(c => c.orders_wow !== null);
+  const gainers  = [...valid].sort((a,b) => b.orders_wow - a.orders_wow).slice(0, 4);
+  const decliners= [...valid].sort((a,b) => a.orders_wow - b.orders_wow).slice(0, 4);
+  const maxAbs   = Math.max(...valid.map(c => Math.abs(c.orders_wow || 0)), 1);
+
+  function moverRow(c, rank, inv) {{
+    const pct   = Math.min(Math.abs(c.orders_wow) / maxAbs * 100, 100);
+    const fill  = inv ? 'var(--danger)' : 'var(--accent)';
+    const dCls  = deltaClass(c.orders_wow, inv);
+    return `<div class="mover-row">
+      <span class="mover-rank">${{rank}}</span>
+      <span class="mover-city">${{c.name}}</span>
+      <div class="mover-bar"><div class="mover-bar-fill" style="width:${{pct.toFixed(1)}}%;background:${{fill}}"></div></div>
+      <span class="mover-delta ${{dCls}}">${{fmtDelta(c.orders_wow)}}</span>
+    </div>`;
   }}
 
-  g.innerHTML = `
-    <div class="movers-card">
-      <h3>📈 Gainers</h3>
-      ${{rows(gainers, false)}}
-    </div>
-    <div class="movers-card">
-      <h3>📉 Decliners</h3>
-      ${{rows(decliners, true)}}
-    </div>`;
+  document.getElementById('gainersRows').innerHTML   = gainers.map((c,i)  => moverRow(c, i+1, false)).join('');
+  document.getElementById('declinersRows').innerHTML = decliners.map((c,i)=> moverRow(c, i+1, true)).join('');
 }}
 
 // ── City table ─────────────────────────────────────────────────────────────
@@ -905,8 +821,7 @@ let sortCol = 'gmv', sortAsc = false;
 
 function renderCityTable() {{
   const tbody = document.getElementById('cityTableBody');
-  const data  = [...CITIES];
-  data.sort((a,b) => {{
+  const data  = [...CITIES].sort((a, b) => {{
     const av = a[sortCol], bv = b[sortCol];
     if (av === null && bv === null) return 0;
     if (av === null) return 1;
@@ -914,55 +829,41 @@ function renderCityTable() {{
     return sortAsc ? (av > bv ? 1 : -1) : (av < bv ? 1 : -1);
   }});
 
-  // Totals row
   const T = TOTALS;
-  function wowCell(v, inv=false, is_pp=false) {{
-    if (v === null || v === undefined) return '';
-    const cls = wowClass(v, inv);
-    return `<span class="cell-wow ${{cls}}">${{fmtWow(v, '%', is_pp)}}</span>`;
-  }}
+  function dc(v, inv) {{ return v !== null && v !== undefined ? ` class="${{deltaClass(v, inv)}}"` : ''; }}
 
-  tbody.innerHTML = data.map(c => `
-    <tr>
-      <td>${{c.name}}</td>
-      <td>${{fmtEur(c.gmv)}}  ${{wowCell(c.gmv_wow)}}</td>
-      <td class="${{wowClass(c.gmv_wow)}}">${{c.gmv_wow!==null?fmtWow(c.gmv_wow):'—'}}</td>
-      <td>${{fmtNum(c.orders)}} ${{wowCell(c.orders_wow)}}</td>
-      <td class="${{wowClass(c.orders_wow)}}">${{c.orders_wow!==null?fmtWow(c.orders_wow):'—'}}</td>
-      <td>${{fmtPct(c.cml2_pct,2)}}</td>
-      <td class="${{wowClass(c.cml2_wow)}}">${{c.cml2_wow!==null?fmtWow(c.cml2_wow,'%',true):'—'}}</td>
-      <td>${{fmtPct(c.di_pct,2)}}</td>
-      <td class="${{wowClass(c.di_wow,true)}}">${{c.di_wow!==null?fmtWow(c.di_wow,'%',true):'—'}}</td>
-      <td>${{fmtEur(c.cpo)}}</td>
-      <td class="${{wowClass(c.cpo_wow,true)}}">${{c.cpo_wow!==null?fmtWow(c.cpo_wow,'%',true):'—'}}</td>
-      <td>${{fmtPct(c.util_pct)}}</td>
-      <td>${{fmtPct(c.ar_pct)}}</td>
-      <td class="${{c.bo_pct>10?'wow-down':''}}">${{fmtPct(c.bo_pct,2)}}</td>
-      <td>${{fmtNum(c.merchants)}}</td>
-    </tr>`).join('') + `
-    <tr class="total-row">
-      <td>All Cities</td>
-      <td>${{fmtEur(T.gmv)}}</td>
-      <td class="${{wowClass(T.gmv_wow)}}">${{T.gmv_wow!==null?fmtWow(T.gmv_wow):'—'}}</td>
-      <td>${{fmtNum(T.orders)}}</td>
-      <td class="${{wowClass(T.orders_wow)}}">${{T.orders_wow!==null?fmtWow(T.orders_wow):'—'}}</td>
-      <td>${{fmtPct(T.cml2_pct,2)}}</td>
-      <td>—</td>
-      <td>${{fmtPct(T.di_pct,2)}}</td>
-      <td>—</td>
-      <td>${{fmtEur(T.cpo)}}</td>
-      <td>—</td>
-      <td>${{fmtPct(T.util_pct)}}</td>
-      <td>${{fmtPct(T.ar_pct)}}</td>
-      <td>${{fmtPct(T.bo_pct,2)}}</td>
-      <td>${{fmtNum(T.merchants)}}</td>
-    </tr>`;
+  tbody.innerHTML = data.map(c => `<tr>
+    <td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${{CITY_COLORS[c.name]||'#34D186'}};margin-right:7px;vertical-align:middle;flex-shrink:0"></span>${{c.name}}</td>
+    <td>${{fmtEur(c.gmv)}}</td>
+    <td${{dc(c.gmv_wow,false)}}>${{fmtDelta(c.gmv_wow)}}</td>
+    <td>${{fmtNum(c.orders)}}</td>
+    <td${{dc(c.orders_wow,false)}}>${{fmtDelta(c.orders_wow)}}</td>
+    <td>${{fmtPct(c.cml2_pct,2)}}</td>
+    <td${{dc(c.cml2_wow,false)}}>${{fmtDelta(c.cml2_wow,true)}}</td>
+    <td>${{fmtPct(c.di_pct,2)}}</td>
+    <td${{dc(c.di_wow,true)}}>${{fmtDelta(c.di_wow,true)}}</td>
+    <td>${{fmtEur(c.cpo)}}</td>
+    <td${{dc(c.cpo_wow,true)}}>${{fmtDelta(c.cpo_wow,true)}}</td>
+    <td>${{fmtPct(c.util_pct)}}</td>
+    <td>${{fmtPct(c.ar_pct)}}</td>
+    <td${{c.bo_pct>10?' class="delta-down"':''}}>${{fmtPct(c.bo_pct,2)}}</td>
+  </tr>`).join('') + `<tr class="total-row">
+    <td>All Cities</td>
+    <td>${{fmtEur(T.gmv)}}</td>
+    <td${{dc(T.gmv_wow,false)}}>${{fmtDelta(T.gmv_wow)}}</td>
+    <td>${{fmtNum(T.orders)}}</td>
+    <td${{dc(T.orders_wow,false)}}>${{fmtDelta(T.orders_wow)}}</td>
+    <td>${{fmtPct(T.cml2_pct,2)}}</td><td>—</td>
+    <td>${{fmtPct(T.di_pct,2)}}</td><td>—</td>
+    <td>${{fmtEur(T.cpo)}}</td><td>—</td>
+    <td>${{fmtPct(T.util_pct)}}</td>
+    <td>${{fmtPct(T.ar_pct)}}</td>
+    <td>${{fmtPct(T.bo_pct,2)}}</td>
+  </tr>`;
 
   document.querySelectorAll('.city-table th').forEach(th => {{
     th.classList.remove('sorted-asc', 'sorted-desc');
-    if (th.dataset.col === sortCol) {{
-      th.classList.add(sortAsc ? 'sorted-asc' : 'sorted-desc');
-    }}
+    if (th.dataset.col === sortCol) th.classList.add(sortAsc ? 'sorted-asc' : 'sorted-desc');
   }});
 }}
 
@@ -978,46 +879,45 @@ document.querySelectorAll('.city-table th').forEach(th => {{
 function renderAmGrid() {{
   const g = document.getElementById('amGrid');
   g.innerHTML = AM_KPIS.map(am => {{
-    const scoreColor = am.score >= 90 ? 'fill-green' : am.score >= 70 ? 'fill-amber' : 'fill-red';
+    const sc = am.score;
+    const badgeCls = sc >= 90 ? 'score-green' : sc >= 70 ? 'score-amber' : 'score-red';
     const kpiRows = Object.entries(am.kpis).map(([key, k]) => {{
       const pct = Math.min(k.pct, 130);
-      const fillClass = key === 'churn'
+      const fillCls = key === 'churn'
         ? (k.actual === 0 ? 'fill-green' : 'fill-red')
         : pct >= 90 ? 'fill-green' : pct >= 60 ? 'fill-amber' : 'fill-red';
-      const label = KPI_LABELS[key] || key;
-      return `
-        <div class="kpi-row">
-          <div class="kpi-row-header">
-            <span class="kpi-name">${{label}}</span>
-            <span class="kpi-val">${{k.actual}} / ${{k.target}} (${{k.pct.toFixed(0)}}%)</span>
-          </div>
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill ${{fillClass}}" style="width:${{Math.min(pct, 100).toFixed(1)}}%"></div>
-          </div>
-        </div>`;
-    }}).join('');
-    return `
-      <div class="am-card">
-        <div class="am-name">${{am.name}}</div>
-        <div class="am-score">Overall score: <span>${{am.score}}%</span></div>
-        ${{kpiRows}}
+      return `<div class="kpi-row-item">
+        <div class="kpi-row-header">
+          <span class="kpi-row-name">${{KPI_LABELS[key] || key}}</span>
+          <span class="kpi-row-val">${{k.actual}} / ${{k.target}} (${{k.pct.toFixed(0)}}%)</span>
+        </div>
+        <div class="progress-bg"><div class="progress-fill ${{fillCls}}" style="width:${{Math.min(pct,100).toFixed(1)}}%"></div></div>
       </div>`;
+    }}).join('');
+    return `<div class="am-card">
+      <div class="am-card-header">
+        <div class="am-name">${{am.name}}</div>
+        <div class="am-score-badge ${{badgeCls}}">${{sc}}%</div>
+      </div>
+      ${{kpiRows}}
+    </div>`;
   }}).join('');
 
-  // Weight badges
   const wr = document.getElementById('weightsRow');
-  wr.innerHTML = Object.entries(KPI_WEIGHTS).map(([k,w]) => `
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 14px;font-size:12px;">
-      <span style="color:var(--text3)">${{KPI_LABELS[k]}}</span>
-      <span style="font-weight:700;color:var(--accent);margin-left:6px">${{(w*100).toFixed(0)}}%</span>
+  wr.innerHTML = Object.entries(KPI_WEIGHTS).map(([k, w]) => `
+    <div class="weight-pill">
+      <span class="weight-name">${{KPI_LABELS[k]}}</span>
+      <span class="weight-val">${{(w * 100).toFixed(0)}}%</span>
     </div>`).join('');
 }}
 
 // ── Init ───────────────────────────────────────────────────────────────────
-renderKpiGrid();
+renderKpiRow();
+renderCityMini();
 renderMovers();
 renderCityTable();
 renderAmGrid();
+lucide.createIcons();
 </script>
 </body>
 </html>"""
