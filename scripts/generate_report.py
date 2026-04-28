@@ -87,27 +87,62 @@ HAVING period IS NOT NULL
 """
 
 # ── AM KPI queries ────────────────────────────────────────────────────────────
+# All queries count MTD (month_start to today), matching central RAM tracker methodology.
 
-# Smart Promos enrolled MTD
+# Smart Promos: blackbox auto-reenrollments only (≈ tracker "Smart Promotions")
 SMART_PROMO_SQL = f"""
 SELECT d.am_managers AS am, COUNT(DISTINCT cp.provider_id) AS cnt
 FROM spark_catalog.ng_delivery_spark.delivery_campaign_provider cp
 JOIN spark_catalog.ng_delivery_spark.dim_provider d ON cp.provider_id = d.provider_id
-WHERE cp.enrollment_state = 'active'
-  AND cp.enrollment_source IN ('smart_promotions',
-                                'portal_smart_promotions_blackbox_reenrollment')
+WHERE cp.enrollment_source = 'portal_smart_promotions_blackbox_reenrollment'
   AND cp.created_date >= '{month_start}'
   AND {AM_FILTER}
   AND {FOOD_FILTER_DIM}
 GROUP BY d.am_managers
 """
 
-# Bolt+ enrolments MTD
+# Bolt+ enrolments MTD — uses dim_provider_v2.account_manager_name (same as RAM tracker)
 BOLTPLUS_SQL = f"""
+SELECT v.account_manager_name AS am, COUNT(DISTINCT v.provider_id) AS cnt
+FROM spark_catalog.ng_delivery_spark.dim_provider_v2 v
+WHERE v.is_bolt_plus_enrolled_provider = true
+  AND v.bolt_plus_agency_fee_commission_rate > 0
+  AND CAST(v.provider_bolt_plus_first_enrollment_start_ts AS DATE) >= '{month_start}'
+  AND v.provider_bolt_plus_last_enrollment_churn_ts IS NULL
+  AND v.account_manager_name IN ('Gabriela Ziółek', 'Patrycja Konfederak', 'Weronika Słomska')
+  AND v.is_bolt_market_provider = false AND v.is_store_provider = false
+GROUP BY v.account_manager_name
+"""
+
+# Renegotiations MTD — only 'Renegotiation' change_reason (excludes Sales benefit etc.)
+RENEG_SQL = f"""
+SELECT d.am_managers AS am, COUNT(DISTINCT r.provider_id) AS cnt
+FROM spark_catalog.ng_delivery_spark.int_provider_commission_logs r
+JOIN spark_catalog.ng_delivery_spark.dim_provider d ON r.provider_id = d.provider_id
+WHERE r.log_created_date >= '{month_start}'
+  AND r.change_reason = 'Renegotiation'
+  AND {AM_FILTER}
+  AND {FOOD_FILTER_DIM}
+GROUP BY d.am_managers
+"""
+
+# Merchant Ads (Sponsored Listings): active hours in current month
+ADS_SQL = f"""
+SELECT d.am_managers AS am, COUNT(DISTINCT h.provider_id) AS cnt
+FROM spark_catalog.mart_models_spark.mart_provider_sponsored_listing_performance_hourly h
+JOIN spark_catalog.ng_delivery_spark.dim_provider d ON h.provider_id = d.provider_id
+WHERE h.sponsored_listing_hour >= '{month_start}'
+  AND {AM_FILTER}
+  AND {FOOD_FILTER_DIM}
+GROUP BY d.am_managers
+"""
+
+# Marketing Campaigns: manual smart_promotions + portal_regular_promotions enrolled MTD
+MKTG_SQL = f"""
 SELECT d.am_managers AS am, COUNT(DISTINCT cp.provider_id) AS cnt
 FROM spark_catalog.ng_delivery_spark.delivery_campaign_provider cp
 JOIN spark_catalog.ng_delivery_spark.dim_provider d ON cp.provider_id = d.provider_id
-WHERE cp.enrollment_source = 'bolt_plus'
+WHERE cp.enrollment_source IN ('smart_promotions', 'portal_regular_promotions')
   AND cp.enrollment_state = 'active'
   AND cp.created_date >= '{month_start}'
   AND {AM_FILTER}
@@ -115,50 +150,16 @@ WHERE cp.enrollment_source = 'bolt_plus'
 GROUP BY d.am_managers
 """
 
-# Renegotiations MTD (commission log entries)
-RENEG_SQL = f"""
-SELECT d.am_managers AS am, COUNT(DISTINCT r.provider_id) AS cnt
-FROM spark_catalog.ng_delivery_spark.int_provider_commission_logs r
-JOIN spark_catalog.ng_delivery_spark.dim_provider d ON r.provider_id = d.provider_id
-WHERE r.log_created_date >= '{month_start}'
-  AND {AM_FILTER}
-  AND {FOOD_FILTER_DIM}
-GROUP BY d.am_managers
-"""
-
-# Merchant Ads active MTD
-ADS_SQL = f"""
-SELECT d.am_managers AS am, COUNT(DISTINCT h.provider_id) AS cnt
-FROM spark_catalog.mart_models_spark.mart_provider_sponsored_listing_performance_hourly h
-JOIN spark_catalog.ng_delivery_spark.dim_provider d ON h.provider_id = d.provider_id
-WHERE h.sponsored_listing_created_date >= '{month_start}'
-  AND h.impressions > 0
-  AND {AM_FILTER}
-  AND {FOOD_FILTER_DIM}
-GROUP BY d.am_managers
-"""
-
-# Marketing Campaigns MTD
-MKTG_SQL = f"""
-SELECT d.am_managers AS am, COUNT(DISTINCT cp.provider_id) AS cnt
-FROM spark_catalog.ng_delivery_spark.delivery_campaign_provider cp
-JOIN spark_catalog.ng_delivery_spark.dim_provider d ON cp.provider_id = d.provider_id
-WHERE cp.enrollment_state = 'active'
-  AND cp.enrollment_source = 'portal_marketing_promotions'
-  AND cp.created_date >= '{month_start}'
-  AND {AM_FILTER}
-  AND {FOOD_FILTER_DIM}
-GROUP BY d.am_managers
-"""
-
-# Churn MTD — fact_provider_non_additive_monthly has account_manager_name directly
+# Churn MTD: providers that hit 28-day inactivity threshold this month
 CHURN_SQL = f"""
-SELECT account_manager_name AS am,
-       SUM(CASE WHEN is_provider_churned THEN 1 ELSE 0 END) AS cnt
-FROM spark_catalog.mart_models_spark.fact_provider_non_additive_monthly
-WHERE timeframe_date = '{month_start}'
-  AND account_manager_name IN ('Gabriela Ziółek', 'Patrycja Konfederak', 'Weronika Słomska')
-GROUP BY account_manager_name
+SELECT d.am_managers AS am, COUNT(DISTINCT pd.provider_id) AS cnt
+FROM spark_catalog.ng_delivery_spark.fact_provider_daily pd
+JOIN spark_catalog.ng_delivery_spark.dim_provider d ON pd.provider_id = d.provider_id
+WHERE pd.observation_date >= '{month_start}'
+  AND pd.churned_provider_28days = 1
+  AND {AM_FILTER}
+  AND {FOOD_FILTER_DIM}
+GROUP BY d.am_managers
 """
 
 # ── Fetch all data ────────────────────────────────────────────────────────────
