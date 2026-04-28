@@ -89,7 +89,6 @@ HAVING period IS NOT NULL
 # ── AM KPI queries ────────────────────────────────────────────────────────────
 # All queries count MTD (month_start to today), matching central RAM tracker methodology.
 
-# Smart Promos: blackbox auto-reenrollments only (≈ tracker "Smart Promotions")
 SMART_PROMO_SQL = f"""
 SELECT d.am_managers AS am, COUNT(DISTINCT cp.provider_id) AS cnt
 FROM spark_catalog.ng_delivery_spark.delivery_campaign_provider cp
@@ -101,7 +100,6 @@ WHERE cp.enrollment_source = 'portal_smart_promotions_blackbox_reenrollment'
 GROUP BY d.am_managers
 """
 
-# Bolt+ enrolments MTD — uses dim_provider_v2.account_manager_name (same as RAM tracker)
 BOLTPLUS_SQL = f"""
 SELECT v.account_manager_name AS am, COUNT(DISTINCT v.provider_id) AS cnt
 FROM spark_catalog.ng_delivery_spark.dim_provider_v2 v
@@ -114,7 +112,6 @@ WHERE v.is_bolt_plus_enrolled_provider = true
 GROUP BY v.account_manager_name
 """
 
-# Renegotiations MTD — only 'Renegotiation' change_reason (excludes Sales benefit etc.)
 RENEG_SQL = f"""
 SELECT d.am_managers AS am, COUNT(DISTINCT r.provider_id) AS cnt
 FROM spark_catalog.ng_delivery_spark.int_provider_commission_logs r
@@ -126,7 +123,6 @@ WHERE r.log_created_date >= '{month_start}'
 GROUP BY d.am_managers
 """
 
-# Merchant Ads (Sponsored Listings): active hours in current month
 ADS_SQL = f"""
 SELECT d.am_managers AS am, COUNT(DISTINCT h.provider_id) AS cnt
 FROM spark_catalog.mart_models_spark.mart_provider_sponsored_listing_performance_hourly h
@@ -137,7 +133,6 @@ WHERE h.sponsored_listing_hour >= '{month_start}'
 GROUP BY d.am_managers
 """
 
-# Marketing Campaigns: manual smart_promotions + portal_regular_promotions enrolled MTD
 MKTG_SQL = f"""
 SELECT d.am_managers AS am, COUNT(DISTINCT cp.provider_id) AS cnt
 FROM spark_catalog.ng_delivery_spark.delivery_campaign_provider cp
@@ -150,7 +145,6 @@ WHERE cp.enrollment_source IN ('smart_promotions', 'portal_regular_promotions')
 GROUP BY d.am_managers
 """
 
-# Churn MTD: providers that hit 28-day inactivity threshold this month
 CHURN_SQL = f"""
 SELECT d.am_managers AS am, COUNT(DISTINCT pd.provider_id) AS cnt
 FROM spark_catalog.ng_delivery_spark.fact_provider_daily pd
@@ -162,7 +156,6 @@ WHERE pd.observation_date >= '{month_start}'
 GROUP BY d.am_managers
 """
 
-# Daily orders per city for sparklines (last 14 days)
 SPARKLINE_SQL = f"""
 SELECT
     d.city_id,
@@ -209,7 +202,6 @@ def _f(v):
     except (ValueError, TypeError):
         return 0.0
 
-# Build per-city, per-period dict
 city_metrics = defaultdict(lambda: {'curr': {}, 'prev': {}})
 
 if df_city is not None:
@@ -268,7 +260,7 @@ def _fmt_wow(v, is_pp=False):
     suffix = 'pp' if is_pp else '%'
     return f'{sign}{v:.1f}{suffix}'
 
-# Build enriched city list with WoW
+# Build enriched city list with WoW and absolute deltas
 cities_out = []
 for name, periods in city_metrics.items():
     curr = periods.get('curr', {})
@@ -283,6 +275,9 @@ for name, periods in city_metrics.items():
     ar     = curr.get('ar_pct', 0)
     bo     = curr.get('bo_pct', 0)
 
+    prev_orders = prev.get('orders', 0)
+    prev_gmv    = prev.get('gmv', 0)
+
     cities_out.append({
         'name':       name,
         'gmv':        round(gmv, 0),
@@ -293,8 +288,10 @@ for name, periods in city_metrics.items():
         'util_pct':   round(util, 1),
         'ar_pct':     round(ar, 1),
         'bo_pct':     round(bo, 2),
-        'gmv_wow':    _wow(gmv, prev.get('gmv', 0)),
-        'orders_wow': _wow(orders, prev.get('orders', 0)),
+        'gmv_wow':    _wow(gmv, prev_gmv),
+        'gmv_abs':    round(gmv - prev_gmv, 0),
+        'orders_wow': _wow(orders, prev_orders),
+        'orders_abs': round(orders - prev_orders, 0),
         'cml2_wow':   _wow(cml2, prev.get('cml2_pct', 0), is_pct=True),
         'di_wow':     _wow(di, prev.get('di_pct', 0), is_pct=True),
         'cpo_wow':    _wow(cpo, prev.get('cpo', 0), is_pct=True),
@@ -359,12 +356,14 @@ def _prev_wavg(key, weight='gmv'):
         for p in city_metrics.values()
     ) / total_w
 
-prev_gmv    = sum(p.get('prev', {}).get('gmv', 0) for p in city_metrics.values())
-prev_orders = sum(p.get('prev', {}).get('orders', 0) for p in city_metrics.values())
+prev_gmv_total    = sum(p.get('prev', {}).get('gmv', 0) for p in city_metrics.values())
+prev_orders_total = sum(p.get('prev', {}).get('orders', 0) for p in city_metrics.values())
 
 total_wows = {
-    'gmv_wow':    _wow(totals['gmv'], prev_gmv),
-    'orders_wow': _wow(totals['orders'], prev_orders),
+    'gmv_wow':    _wow(totals['gmv'], prev_gmv_total),
+    'gmv_abs':    round(totals['gmv'] - prev_gmv_total, 0),
+    'orders_wow': _wow(totals['orders'], prev_orders_total),
+    'orders_abs': round(totals['orders'] - prev_orders_total, 0),
     'cml2_wow':   round(totals['cml2_pct'] - _prev_wavg('cml2_pct'), 2),
     'di_wow':     round(totals['di_pct']   - _prev_wavg('di_pct'), 2),
     'cpo_wow':    round(totals['cpo']      - _prev_wavg('cpo', 'orders'), 2),
@@ -404,7 +403,7 @@ def _kpi_score(am):
         elif target == 0:
             achievement = 1.0
         else:
-            achievement = min(actual / target, 1.3)  # cap at 130%
+            achievement = min(actual / target, 1.3)
         score += weight * achievement
     return round(score * 100, 1)
 
@@ -516,42 +515,60 @@ body {{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-ser
 .section-title {{ font-size:0.88em; font-weight:700; color:var(--text); display:flex; align-items:center; gap:8px; margin:0 0 12px 0; }}
 .section-title .accent-bar {{ width:3px; height:18px; background:var(--accent); border-radius:2px; flex-shrink:0; }}
 
-/* ── KPI row (overview top) ── */
-.kpi-row {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px; }}
-@media (max-width:1100px) {{ .kpi-row {{ grid-template-columns:repeat(2,1fr); }} }}
-.kpi-card {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; transition:all 0.2s ease; }}
-.kpi-card:hover {{ border-color:var(--border-hover); box-shadow:var(--shadow-md); }}
-.kpi-label {{ font-size:0.62em; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:5px; }}
-.kpi-value {{ font-size:1.5em; font-weight:800; letter-spacing:-0.03em; color:var(--text); line-height:1.1; }}
-.kpi-delta {{ font-size:0.72em; font-weight:600; margin-top:4px; }}
-.delta-up   {{ color:var(--accent); }}
-.delta-down {{ color:var(--danger); }}
-.delta-neut {{ color:var(--text-muted); }}
+/* ── Executive Summary header ── */
+.exec-header {{ display:flex; align-items:center; gap:14px; margin-bottom:16px; }}
+.exec-title {{ font-size:1.25em; font-weight:800; color:var(--text); letter-spacing:-0.02em; display:flex; align-items:center; gap:10px; }}
+.exec-title::before {{ content:''; display:inline-block; width:4px; height:22px; background:var(--accent); border-radius:2px; }}
+.exec-week {{ font-size:0.72em; color:var(--text-muted); margin-left:4px; }}
 
-/* ── Overview bottom grid ── */
-.overview-bottom {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:14px; }}
+/* ── KPI row (6 cards, each with own color) ── */
+.kpi-row-6 {{ display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:16px; }}
+@media (max-width:1200px) {{ .kpi-row-6 {{ grid-template-columns:repeat(3,1fr); }} }}
+@media (max-width:800px)  {{ .kpi-row-6 {{ grid-template-columns:repeat(2,1fr); }} }}
+.kpi-card {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:16px 18px; transition:all 0.2s ease; }}
+.kpi-card:hover {{ border-color:var(--border-hover); box-shadow:var(--shadow-md); }}
+.kpi-label {{ font-size:0.6em; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }}
+.kpi-value {{ font-size:1.6em; font-weight:800; letter-spacing:-0.03em; line-height:1.05; margin-bottom:6px; }}
+.kpi-delta {{ font-size:0.72em; font-weight:600; color:var(--text-muted); }}
+.kpi-delta .pct {{ font-weight:700; }}
+.kpi-delta .abs {{ opacity:0.75; margin-left:3px; }}
+.delta-up   {{ color:var(--accent) !important; }}
+.delta-down {{ color:var(--danger) !important; }}
+.delta-neut {{ color:var(--text-muted) !important; }}
+
+/* ── Overview lower split ── */
+.exec-lower {{ display:grid; grid-template-columns:1fr 380px; gap:14px; }}
+@media (max-width:1100px) {{ .exec-lower {{ grid-template-columns:1fr; }} }}
 .dash-card {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow-sm); transition:all 0.2s ease; }}
 .dash-card:hover {{ box-shadow:var(--shadow-md); border-color:var(--border-hover); }}
+.card-category {{ font-size:0.62em; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; display:flex; align-items:center; gap:6px; }}
+.card-category i {{ width:13px; height:13px; opacity:0.6; }}
+.card-title {{ font-size:1.05em; font-weight:700; color:var(--text); margin-bottom:14px; letter-spacing:-0.01em; }}
 
-/* ── City mini-cards ── */
-.city-mini-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }}
-.city-mini {{ background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px 12px; cursor:pointer; transition:all 0.2s; display:flex; flex-direction:column; }}
-.city-mini:hover {{ border-color:var(--border-hover); box-shadow:var(--shadow-sm); }}
-.city-mini-name {{ font-size:0.73em; font-weight:700; color:var(--text); margin-bottom:3px; }}
-.city-mini-val {{ font-size:1.05em; font-weight:800; color:var(--text); line-height:1; }}
-.city-mini-sub {{ font-size:0.62em; color:var(--text-muted); margin-top:2px; }}
-.city-mini-spark {{ height:30px; margin-top:6px; }}
-.city-mini-spark svg {{ width:100%; height:100%; }}
+/* ── City big grid (3×3) ── */
+.city-big-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }}
+.city-big-card {{ background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:14px 12px 10px; cursor:pointer; transition:all 0.2s; display:flex; flex-direction:column; align-items:center; text-align:center; position:relative; overflow:hidden; }}
+.city-big-card:hover {{ border-color:var(--border-hover); box-shadow:var(--shadow-sm); transform:translateY(-1px); }}
+.city-big-name {{ font-size:0.8em; font-weight:700; margin-bottom:4px; }}
+.city-big-orders {{ font-size:1.5em; font-weight:800; color:var(--text); letter-spacing:-0.03em; line-height:1.1; }}
+.city-big-sub {{ font-size:0.62em; color:var(--text-muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }}
+.city-big-spark {{ height:36px; width:100%; margin-top:8px; }}
+.city-big-spark svg {{ width:100%; height:100%; }}
 
 /* ── Movers ── */
-.mover-row {{ display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid var(--border); font-size:0.8em; }}
+.movers-section {{ margin-bottom:12px; }}
+.movers-label {{ font-size:0.68em; font-weight:700; text-transform:uppercase; letter-spacing:0.8px; margin-bottom:8px; }}
+.movers-label.gainers  {{ color:var(--accent); }}
+.movers-label.decliners {{ color:var(--danger); }}
+.mover-row {{ display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border); font-size:0.8em; }}
 .mover-row:last-child {{ border-bottom:none; }}
-.mover-rank {{ width:18px; font-weight:700; font-size:0.72em; color:var(--text-muted); text-align:center; flex-shrink:0; }}
-.mover-city {{ font-weight:600; flex:1; color:var(--text); }}
-.mover-delta {{ font-weight:700; font-size:0.82em; white-space:nowrap; min-width:46px; text-align:right; }}
-.mover-bar {{ flex:0 0 50px; height:5px; border-radius:3px; background:var(--border); overflow:hidden; }}
-.mover-bar-fill {{ height:100%; border-radius:3px; transition:width 0.8s ease; }}
-.movers-subhead {{ font-size:0.68em; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; }}
+.mover-rank {{ width:16px; font-weight:700; font-size:0.7em; color:var(--text-muted); text-align:center; flex-shrink:0; }}
+.mover-city {{ font-weight:600; flex:1; color:var(--text); font-size:0.9em; }}
+.mover-bar {{ flex:0 0 44px; height:4px; border-radius:3px; background:var(--border); overflow:hidden; }}
+.mover-bar-fill {{ height:100%; border-radius:3px; }}
+.mover-delta {{ font-weight:700; font-size:0.82em; white-space:nowrap; text-align:right; }}
+.mover-delta .mover-abs {{ display:inline; }}
+.mover-delta .mover-pct {{ opacity:0.7; font-size:0.88em; margin-left:3px; }}
 
 /* ── City table ── */
 .city-table-wrap {{ background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); overflow:auto; margin-bottom:20px; }}
@@ -593,7 +610,7 @@ body {{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-ser
 .weight-name {{ color:var(--text-muted); }}
 .weight-val  {{ font-weight:700; color:var(--accent); margin-left:5px; }}
 
-@media (max-width:900px) {{ .sidebar {{ display:none; }} .main-content {{ margin-left:0; }} .overview-bottom {{ grid-template-columns:1fr; }} .city-mini-grid {{ grid-template-columns:1fr 1fr; }} }}
+@media (max-width:900px) {{ .sidebar {{ display:none; }} .main-content {{ margin-left:0; }} .city-big-grid {{ grid-template-columns:1fr 1fr; }} }}
 </style>
 </head>
 <body>
@@ -639,29 +656,40 @@ body {{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-ser
 
   <div class="content-area">
 
-    <!-- Overview tab -->
+    <!-- ── Overview tab ── -->
     <div id="tab-overview" class="tab-panel active">
-      <div class="kpi-row" id="kpiRow"></div>
-      <div class="overview-bottom">
+
+      <div class="exec-header">
+        <div class="exec-title">Executive Summary</div>
+        <span class="exec-week">{week_label}</span>
+      </div>
+
+      <!-- 6 KPI cards -->
+      <div class="kpi-row-6" id="kpiRow"></div>
+
+      <!-- City grid + Movers -->
+      <div class="exec-lower">
         <div class="dash-card">
-          <div class="section-title"><div class="accent-bar"></div>City Performance</div>
-          <div class="city-mini-grid" id="cityMiniGrid"></div>
+          <div class="card-category"><i data-lucide="layers"></i>PERFORMANCE</div>
+          <div class="card-title">City Overview</div>
+          <div class="city-big-grid" id="cityBigGrid"></div>
         </div>
         <div class="dash-card">
-          <div class="section-title"><div class="accent-bar"></div>Top Movers — Orders WoW</div>
-          <div style="margin-bottom:16px">
-            <div class="movers-subhead">Gainers</div>
+          <div class="card-category"><i data-lucide="trending-up"></i>WEEKLY CHANGE</div>
+          <div class="card-title">Top Movers (WoW Orders)</div>
+          <div class="movers-section">
+            <div class="movers-label gainers">GAINERS</div>
             <div id="gainersRows"></div>
           </div>
-          <div>
-            <div class="movers-subhead">Decliners</div>
+          <div class="movers-section">
+            <div class="movers-label decliners">DECLINERS</div>
             <div id="declinersRows"></div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Cities tab -->
+    <!-- ── Cities tab ── -->
     <div id="tab-cities" class="tab-panel">
       <div class="section-title"><div class="accent-bar"></div>City Breakdown — click headers to sort</div>
       <div class="city-table-wrap">
@@ -691,7 +719,7 @@ body {{ font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-ser
       </div>
     </div>
 
-    <!-- AM KPIs tab -->
+    <!-- ── AM KPIs tab ── -->
     <div id="tab-am_kpis" class="tab-panel">
       <div class="section-title"><div class="accent-bar"></div>AM KPIs — Q2 2026 · Month-to-date vs monthly targets</div>
       <div class="am-grid" id="amGrid"></div>
@@ -727,15 +755,28 @@ function showTab(id, btn) {{
 // ── Formatters ─────────────────────────────────────────────────────────────
 function fmtEur(v) {{
   if (v === null || v === undefined || isNaN(v)) return '—';
-  if (v >= 1e6) return '€' + (v/1e6).toFixed(2) + 'M';
-  if (v >= 1e3) return '€' + (v/1e3).toFixed(1) + 'k';
-  return '€' + v.toFixed(2);
+  if (Math.abs(v) >= 1e6) return '€' + (v/1e6).toFixed(2) + 'M';
+  if (Math.abs(v) >= 1e3) return '€' + (v/1e3).toFixed(1) + 'k';
+  return '€' + v.toFixed(0);
+}}
+function fmtEurAbs(v) {{
+  if (v === null || v === undefined || isNaN(v)) return '';
+  const sign = v >= 0 ? '+' : '';
+  if (Math.abs(v) >= 1e6) return sign + '€' + (v/1e6).toFixed(2) + 'M';
+  if (Math.abs(v) >= 1e3) return sign + '€' + (v/1e3).toFixed(1) + 'k';
+  return sign + '€' + v.toFixed(0);
 }}
 function fmtNum(v) {{
   if (v === null || v === undefined || isNaN(v)) return '—';
-  if (v >= 1e6) return (v/1e6).toFixed(2) + 'M';
-  if (v >= 1e3) return (v/1e3).toFixed(1) + 'k';
+  if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(2) + 'M';
+  if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1) + 'k';
   return String(Math.round(v));
+}}
+function fmtNumAbs(v) {{
+  if (v === null || v === undefined || isNaN(v)) return '';
+  const sign = v >= 0 ? '+' : '';
+  if (Math.abs(v) >= 1e3) return sign + (v/1e3).toFixed(1) + 'k';
+  return sign + Math.round(v);
 }}
 function fmtPct(v, d) {{
   if (v === null || v === undefined) return '—';
@@ -751,31 +792,39 @@ function fmtDelta(v, pp) {{
   return (v >= 0 ? '+' : '') + v.toFixed(1) + (pp ? 'pp' : '%');
 }}
 
-// ── Overview KPI row ───────────────────────────────────────────────────────
+// ── Overview KPI cards ─────────────────────────────────────────────────────
 function renderKpiRow() {{
-  const g = document.getElementById('kpiRow');
+  const T = TOTALS;
   const cards = [
-    {{ label:'GMV',          val:fmtEur(TOTALS.gmv),        delta:TOTALS.gmv_wow,    pp:false, inv:false }},
-    {{ label:'Orders',       val:fmtNum(TOTALS.orders),     delta:TOTALS.orders_wow, pp:false, inv:false }},
-    {{ label:'CML2%',        val:fmtPct(TOTALS.cml2_pct,2), delta:TOTALS.cml2_wow,   pp:true,  inv:false }},
-    {{ label:'DI%',          val:fmtPct(TOTALS.di_pct,2),   delta:TOTALS.di_wow,     pp:true,  inv:true  }},
-    {{ label:'CPO',          val:fmtEur(TOTALS.cpo),        delta:TOTALS.cpo_wow,    pp:true,  inv:true  }},
-    {{ label:'Courier Util', val:fmtPct(TOTALS.util_pct),   delta:TOTALS.util_wow,   pp:true,  inv:false }},
-    {{ label:'Courier AR%',  val:fmtPct(TOTALS.ar_pct),     delta:TOTALS.ar_wow,     pp:true,  inv:false }},
-    {{ label:'BO%',          val:fmtPct(TOTALS.bo_pct,2),   delta:null,              pp:true,  inv:true  }},
+    {{ label:'TOTAL GMV (WEEK)', val:fmtEur(T.gmv),        color:'#34D186', wow:T.gmv_wow,    abs:fmtEurAbs(T.gmv_abs),    pp:false, inv:false }},
+    {{ label:'TOTAL ORDERS',     val:fmtNum(T.orders),     color:'#3b82f6', wow:T.orders_wow, abs:fmtNumAbs(T.orders_abs), pp:false, inv:false }},
+    {{ label:'AVG CML2%',        val:fmtPct(T.cml2_pct,1), color:'#14b8a6', wow:T.cml2_wow,   abs:null,                    pp:true,  inv:false }},
+    {{ label:'AVG DI%',          val:fmtPct(T.di_pct,1),   color:'#f59e0b', wow:T.di_wow,     abs:null,                    pp:true,  inv:true  }},
+    {{ label:'AVG CPO',          val:fmtEur(T.cpo),        color:'#a78bfa', wow:T.cpo_wow,    abs:null,                    pp:true,  inv:true  }},
+    {{ label:'AVG BO%',          val:fmtPct(T.bo_pct,1),   color:'#f87171', wow:null,          abs:null,                    pp:true,  inv:true  }},
   ];
-  g.innerHTML = cards.map(c => `
-    <div class="kpi-card">
+
+  const g = document.getElementById('kpiRow');
+  g.innerHTML = cards.map(c => {{
+    const cls = c.wow !== null ? deltaClass(c.wow, c.inv) : '';
+    const sign = c.wow !== null ? (c.wow >= 0 ? '+' : '') : '';
+    const wowStr = c.wow !== null ? `${{sign}}${{c.wow.toFixed(1)}}${{c.pp ? 'pp' : '%'}}` : '';
+    const absStr = c.abs ? `(${{c.abs}})` : (c.wow !== null && c.pp ? '' : '');
+    const deltaHtml = c.wow !== null
+      ? `<div class="kpi-delta"><span class="pct ${{cls}}">${{wowStr}}</span>${{absStr ? `<span class="abs ${{cls}}">${{absStr}}</span>` : ''}}</div>`
+      : '';
+    return `<div class="kpi-card">
       <div class="kpi-label">${{c.label}}</div>
-      <div class="kpi-value">${{c.val}}</div>
-      ${{c.delta !== null ? `<div class="kpi-delta ${{deltaClass(c.delta, c.inv)}}">${{fmtDelta(c.delta, c.pp)}} WoW</div>` : ''}}
-    </div>`).join('');
+      <div class="kpi-value" style="color:${{c.color}}">${{c.val}}</div>
+      ${{deltaHtml}}
+    </div>`;
+  }}).join('');
 }}
 
 // ── Sparkline SVG ──────────────────────────────────────────────────────────
 function buildSparkline(values, color) {{
   if (!values || values.length < 2) return '';
-  const W = 100, H = 30, pad = 2;
+  const W = 100, H = 36, pad = 2;
   const mn = Math.min(...values), mx = Math.max(...values);
   const range = mx - mn || 1;
   const pts = values.map((v, i) => {{
@@ -784,24 +833,26 @@ function buildSparkline(values, color) {{
     return x.toFixed(1) + ',' + y.toFixed(1);
   }}).join(' ');
   return `<svg viewBox="0 0 ${{W}} ${{H}}" preserveAspectRatio="none">
-    <polyline points="${{pts}}" fill="none" stroke="${{color}}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+    <polyline points="${{pts}}" fill="none" stroke="${{color}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
   </svg>`;
 }}
 
-// ── City mini-grid ─────────────────────────────────────────────────────────
-function renderCityMini() {{
-  const g = document.getElementById('cityMiniGrid');
+// ── City big grid ──────────────────────────────────────────────────────────
+function renderCityBigGrid() {{
+  const g = document.getElementById('cityBigGrid');
   const citiesBtn = document.querySelectorAll('.sidebar-item')[1];
   g.innerHTML = CITIES.map(c => {{
     const color  = CITY_COLORS[c.name] || '#34D186';
-    const dClass = deltaClass(c.orders_wow, false);
     const spark  = buildSparkline(c.spark, color);
-    const deltaStr = c.orders_wow !== null ? `<span class="${{dClass}}" style="margin-left:4px">${{fmtDelta(c.orders_wow)}}</span>` : '';
-    return `<div class="city-mini" style="border-top:3px solid ${{color}}" onclick="showTab('cities', document.querySelectorAll('.sidebar-item')[1])">
-      <div class="city-mini-name">${{c.name}}</div>
-      <div class="city-mini-val">${{fmtNum(c.orders)}}</div>
-      <div class="city-mini-sub">${{fmtEur(c.gmv)}}${{deltaStr}}</div>
-      <div class="city-mini-spark">${{spark}}</div>
+    const sign   = (c.orders_wow !== null && c.orders_wow >= 0) ? '+' : '';
+    const wowStr = c.orders_wow !== null ? `${{sign}}${{c.orders_wow.toFixed(1)}}%` : '';
+    const absStr = c.orders_abs !== undefined ? fmtNumAbs(c.orders_abs) : '';
+    return `<div class="city-big-card" style="border-top:3px solid ${{color}}"
+             onclick="showTab('cities', document.querySelectorAll('.sidebar-item')[1])">
+      <div class="city-big-name" style="color:${{color}}">${{c.name}}</div>
+      <div class="city-big-orders">${{fmtNum(c.orders)}}</div>
+      <div class="city-big-sub">orders · ${{fmtEur(c.gmv)}} GMV${{wowStr ? ' · ' + wowStr : ''}}</div>
+      <div class="city-big-spark">${{spark}}</div>
     </div>`;
   }}).join('');
 }}
@@ -809,24 +860,27 @@ function renderCityMini() {{
 // ── Movers ─────────────────────────────────────────────────────────────────
 function renderMovers() {{
   const valid    = CITIES.filter(c => c.orders_wow !== null);
-  const gainers  = [...valid].sort((a,b) => b.orders_wow - a.orders_wow).slice(0, 4);
-  const decliners= [...valid].sort((a,b) => a.orders_wow - b.orders_wow).slice(0, 4);
+  const gainers  = [...valid].sort((a,b) => b.orders_wow - a.orders_wow).slice(0, 5);
+  const decliners= [...valid].sort((a,b) => a.orders_wow - b.orders_wow).slice(0, 5);
   const maxAbs   = Math.max(...valid.map(c => Math.abs(c.orders_wow || 0)), 1);
 
   function moverRow(c, rank, inv) {{
     const pct   = Math.min(Math.abs(c.orders_wow) / maxAbs * 100, 100);
     const fill  = inv ? 'var(--danger)' : 'var(--accent)';
     const dCls  = deltaClass(c.orders_wow, inv);
+    const arrow = inv ? '↓' : '↑';
+    const absStr = c.orders_abs !== undefined ? fmtNumAbs(c.orders_abs) : '';
+    const sign  = c.orders_wow >= 0 ? '+' : '';
     return `<div class="mover-row">
       <span class="mover-rank">${{rank}}</span>
       <span class="mover-city">${{c.name}}</span>
       <div class="mover-bar"><div class="mover-bar-fill" style="width:${{pct.toFixed(1)}}%;background:${{fill}}"></div></div>
-      <span class="mover-delta ${{dCls}}">${{fmtDelta(c.orders_wow)}}</span>
+      <span class="mover-delta ${{dCls}}">${{arrow}} <span class="mover-abs">${{absStr}}</span><span class="mover-pct">(${{sign}}${{c.orders_wow.toFixed(1)}}%)</span></span>
     </div>`;
   }}
 
-  document.getElementById('gainersRows').innerHTML   = gainers.map((c,i)  => moverRow(c, i+1, false)).join('');
-  document.getElementById('declinersRows').innerHTML = decliners.map((c,i)=> moverRow(c, i+1, true)).join('');
+  document.getElementById('gainersRows').innerHTML   = gainers.map((c,i)   => moverRow(c, i+1, false)).join('');
+  document.getElementById('declinersRows').innerHTML = decliners.map((c,i) => moverRow(c, i+1, true)).join('');
 }}
 
 // ── City table ─────────────────────────────────────────────────────────────
@@ -846,7 +900,7 @@ function renderCityTable() {{
   function dc(v, inv) {{ return v !== null && v !== undefined ? ` class="${{deltaClass(v, inv)}}"` : ''; }}
 
   tbody.innerHTML = data.map(c => `<tr>
-    <td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${{CITY_COLORS[c.name]||'#34D186'}};margin-right:7px;vertical-align:middle;flex-shrink:0"></span>${{c.name}}</td>
+    <td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${{CITY_COLORS[c.name]||'#34D186'}};margin-right:7px;vertical-align:middle"></span>${{c.name}}</td>
     <td>${{fmtEur(c.gmv)}}</td>
     <td${{dc(c.gmv_wow,false)}}>${{fmtDelta(c.gmv_wow)}}</td>
     <td>${{fmtNum(c.orders)}}</td>
@@ -933,7 +987,7 @@ function renderAmGrid() {{
 
 // ── Init ───────────────────────────────────────────────────────────────────
 renderKpiRow();
-renderCityMini();
+renderCityBigGrid();
 renderMovers();
 renderCityTable();
 renderAmGrid();
